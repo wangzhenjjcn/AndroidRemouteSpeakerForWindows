@@ -1,0 +1,519 @@
+下面是一份可落地的完整方案，覆盖**技术栈选择、系统架构、通信协议、安全/配对、延迟与缓冲策略、详细功能清单、Windows/Android 界面设计说明**，以及一份**可直接喂给 Cursor 的任务列表（逐里程碑、逐文件、含验收标准）**。目标是在 **Windows 10/11** 捕获“当前系统音频”并通过局域网低延迟传到 **Android** 播放，同时 **Android 端可反向控制** Windows 上的播放/暂停/上一首/下一首等。
+
+---
+
+## 1) 项目命名与目标
+
+**项目名（建议）**：AudioBridge LAN
+**核心目标**：
+
+* Windows 捕获系统环回音频（不限定播放器），编码压缩，低延迟传给 Android。
+* Android 端解码播放，同时向 Windows 端发送 **播放/暂停/上一首/下一首** 等控制指令。
+* 局域网自动发现 + 二维码配对；支持系统托盘常驻。
+* 端到端可选延迟目标（默认 80–120 ms，可调）。
+
+---
+
+## 2) 总体架构（推荐实现）
+
+### 2.1 组件划分
+
+* **Win 桌面端（.NET 8 / WPF）**
+
+  * 音频捕获：WASAPI Loopback (NAudio)
+  * 音频编码：Opus（Concentus.NET，纯 C# 实现，免 NDK）
+  * 传输：自定义 **UDP** 数据通道（带顺序/时间戳/丢包标记 + AES-GCM 加密）
+  * 控制：**WebSocket**（ASP.NET Core Kestrel 自托管，消息层 HMAC 校验 + TLS 可选）
+  * 媒体控制：**Windows Global System Media Transport Controls (SMTC)**
+    （通过 `Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager`，必要时回退为注入媒体虚拟键）
+  * 服务发现：mDNS/Bonjour（C# Zeroconf 库）
+  * 托盘：WPF + TaskbarIcon（最小化到右下角托盘）
+
+* **Android 客户端（Kotlin）**
+
+  * 音频解码：Opus（libopus via NDK 或 Concentus-Java；推荐 **libopus** 解码性能更佳）
+  * 播放：`AudioTrack` 低延迟流式播放（MODE_STREAM）
+  * 传输：UDP Socket + 抖动缓冲（Jitter Buffer）+ 丢包隐藏（PLC）
+  * 控制：WebSocket（OkHttp）发指令；接收 Windows 的 now-playing 元数据
+  * 服务发现：Android `NSDManager`（mDNS）
+  * 前台服务 + MediaSession + 通知栏控制，支持耳机线控/蓝牙按键
+
+> **为什么不用 WebRTC？**
+> WebRTC 很强但集成/体积/调优成本较高。本方案以 **Opus+UDP** 自定义通道获得更可控的时延/抖动处理。若未来需要 NAT 穿透、带宽自适应、回声消除等，可切换/新增 WebRTC 模式（见文末“替代方案”）。
+
+---
+
+## 3) 技术栈与关键依赖
+
+### Windows（.NET 8 / WPF）
+
+* 音频：**NAudio**（WASAPI Loopback + MediaFoundationResampler -> 48 kHz/16-bit）
+* 编码：**Concentus.Opus**（Opus 1.3.x C# 端口）
+* 加密：`System.Security.Cryptography.AesGcm`（AES-256-GCM）
+* 控制/WebSocket：**ASP.NET Core Minimal APIs**（Kestrel）
+* mDNS：**Zeroconf**（C#）
+* SMTC：**Microsoft.Windows.SDK.NET**（CsWinRT 调用 WinRT API）
+* 托盘：**Hardcodet.Wpf.TaskbarNotification**
+
+### Android（Kotlin + NDK）
+
+* 网络：OkHttp WebSocket + DatagramSocket (UDP)
+* 解码：**libopus**（NDK 引入；或先期用 Concentus-Java 过渡）
+* 播放：`AudioTrack`（低延迟，`AudioAttributes.USAGE_MEDIA`）
+* 发现：`NSDManager`
+* 二维码扫描：**ZXing Android Embedded**
+* 安全：`Cipher(AES/GCM/NoPadding)`、`Mac(HmacSHA256)`
+
+---
+
+## 4) 传输协议与数据格式
+
+### 4.1 控制通道（WebSocket over HTTP/1.1 或 HTTPS）
+
+* **握手**：Android 连接 Windows `ws(s)://<host>:<port>/control`，携带 `clientId`、`nonce`、`hmac`（基于预共享密钥 PSK 对 `clientId+nonce+timestamp` 做 HMAC-SHA256 校验）。
+* **消息格式（JSON）**：
+
+```json
+// Client -> Server (Android -> Windows)
+{ "type": "cmd", "action": "play|pause|next|prev|seek", "value": 0 }
+
+// Server -> Client (Windows -> Android)
+{ "type": "nowPlaying", "title": "xxx", "artist": "yyy", "album": "zzz", "positionMs": 12345, "durationMs": 200000, "app": "Spotify" }
+
+{ "type": "telemetry", "latencyMs": 95, "pktLossPct": 1.2, "jitterMs": 8 }
+```
+
+* **可靠性**：控制通道天然可靠（WebSocket/TCP）；重新连接自动恢复订阅。
+
+### 4.2 音频通道（UDP + AES-GCM）
+
+* **数据帧**：20 ms 一帧（Opus 48 kHz，960 样本/声道），立体声
+* **包头（12 字节）**：
+
+  * `magic` 4B = `0x4F505553` (“OPUS”)
+  * `seq` 2B（循环计数）
+  * `timestamp48k` 4B（以 48 kHz 采样时钟递增）
+  * `flags` 1B（声道/PLC 标记/FEC）
+  * `keyId` 1B（密钥轮换标识）
+* **负载**：Opus 压缩帧（可 20–80 字节/帧，视码率）
+* **加密**：AES-256-GCM，`nonce = salt(4B) || seq(2B) || timestamp48k(4B) || flags(1B) || keyId(1B)`（12 B）
+* **重放保护**：以 `seq` 做窗口检查（滑窗大小 2^12），超窗丢弃
+* **抖动缓冲**：目标缓存 60–80 ms（3–4 帧），自适应 +/- 20 ms
+
+---
+
+## 5) 安全与配对
+
+* **预共享密钥（PSK）**：Windows 首次启动生成 256-bit 随机密钥，存于 `%AppData%\AudioBridge\settings.json`。
+* **二维码配对**：二维码内容为
+  `abridge://pair?host=192.168.1.10&ctrl=8181&audio=5004&key=BASE64URL(PSK)&device=PCNAME`
+* **权限最小化**：Android 仅需网络、相机（扫码）、前台服务、唤醒锁。
+* **可选 TLS**：控制通道可启用自签名证书（局域网），或在消息层使用 HMAC 校验保证抗篡改。
+
+---
+
+## 6) 时延与缓冲策略（默认值可调）
+
+* **帧长**：20 ms（兼顾开销与 FEC）
+* **码率**：96 kbps 立体声（范围 64–160 kbps 可调）
+* **端到端目标**：80–120 ms（Win 端编码 + 传输 + 抖动 + 解码 + AudioTrack 排队）
+* **丢包**：启用 Opus PLC；可选开启 `inband FEC`（`opus_set_inband_fec=1`，`packet_loss_perc=5`）
+* **时钟漂移**：Android 每 2–5 s 计算缓冲深度趋势，使用 `AudioTrack.setPlaybackParams(speed=0.995–1.005)` 做微调，避免长期欠/溢出。
+
+---
+
+## 7) 功能清单
+
+### Windows 端
+
+* [x] 系统音频环回捕获（默认输出设备 / 指定设备）
+* [x] Opus 编码（CBR/VBR 切换）
+* [x] UDP 音频推送（单播；后续可支持组播/多客户端）
+* [x] WebSocket 控制服务（命令接收 / 元数据推送 / 统计）
+* [x] SMTC 媒体控制（play/pause/next/prev/seek/volume）
+* [x] mDNS 广播服务（`_audiobridge._udp` / `_audiobridge-ctrl._tcp`）
+* [x] 托盘常驻、开机自启、快速菜单
+* [x] 配对二维码/密钥管理、日志与调试页
+
+### Android 端
+
+* [x] 扫码配对 & 局域网发现列表
+* [x] 连接/重连策略（控制 + 音频双通道）
+* [x] UDP 抖动缓冲 + Opus 解码 + 低延迟 `AudioTrack` 播放
+* [x] 反向控制（播放/暂停/上一首/下一首/seek）
+* [x] Now Playing 展示（标题/歌手/专辑/应用图标）
+* [x] 前台服务 + 通知栏控制 + MediaSession（耳机/车载兼容）
+* [x] 统计面板（时延、丢包、抖动、码率）
+
+---
+
+## 8) 界面设计（详细描述）
+
+### 8.1 Windows（WPF，深浅色自适应）
+
+**主窗口（设为“简洁卡片式”）**
+
+* 顶部：状态条
+
+  * 左：圆点状态（灰=未连接 / 绿=正在推流 / 黄=发现客户端 / 红=错误），当前码率/延迟概览
+  * 右：最小化到托盘、设置、日志按钮
+* 分区一：**音频源**
+
+  * 下拉：播放设备选择（默认设备 + 枚举列表）
+  * 复选：设备切换自动跟随
+* 分区二：**编码与网络**
+
+  * 码率滑块：64–160 kbps；帧长（10/20/40ms）；VBR/CBR
+  * 端口设置（控制/音频），mDNS 开关
+  * 加密：开/关、密钥轮换（按钮生成）
+* 分区三：**已配对/已连接设备**（列表）
+
+  * 设备名、IP、延迟、丢包、最后活动时间；踢出/重置配对
+* 底部：**二维码区域**（显示配对二维码；“复制文本”、“保存 PNG”）
+
+**托盘菜单**
+
+* 显示 / 隐藏
+* 开始/停止推流
+* 选择音频源（子菜单）
+* 码率预设（64/96/128/160）
+* 复制配对链接 / 显示二维码
+* 设置 / 日志
+* 退出
+
+### 8.2 Android（Kotlin，Material 3）
+
+**页面 1：配对与发现**
+
+* 顶部搜索栏 + “扫描二维码”FAB
+* 列表项：发现的 Windows 设备（名称、IP、信号/延迟、是否已配对）
+* 右上角菜单：导入密钥（粘贴）、清除配对、调试
+
+**页面 2：播放器（连接成功后）**
+
+* 上半区：专辑封面（无封面时用图标占位）
+* 中部：标题/歌手/专辑，进度条（可拖动 seek）
+* 控件：上一首 | 播放/暂停（主按钮）| 下一首
+* 次控件：静音/音量条（仅本机音量或远程音量模式切换）、延迟指示（彩色点 + 数字）
+* 下部：连接状态（Wi‑Fi SSID、IP、丢包%、抖动）、“保持唤醒”开关
+* 通知栏：同等控件 + 退出/断开
+
+---
+
+## 9) 代码仓库结构（Monorepo）
+
+```
+/AudioBridge
+  /windows
+    AudioBridge.Windows.sln
+    /App
+      /Audio   (WASAPI, Resampler, OpusEncoder)
+      /Net     (UDP, Packetizer, Crypto, WebSocket host)
+      /SMTC    (MediaControls)
+      /Discovery (mDNS)
+      /UI      (WPF Views/ViewModels, Tray)
+      /Config  (Settings, KeyStore)
+      /Interop (WinRT/SendInput)
+    /Tests
+  /android
+    /app
+      /src/main/java/com/audiobridge/...
+        audio/   (OpusDecoder, JitterBuffer, AudioTrack)
+        net/     (UDP, WS, Discovery, Crypto)
+        ui/
+        data/    (Settings, Pairing)
+        service/ (Foreground, MediaSession)
+      /src/main/cpp (libopus wrapper, JNI)
+    /tests
+  /shared
+    /proto-or-json-schemas (message JSON schema)
+    /docs (协议、时延预算、UI草图)
+  /scripts (build, signing, packaging)
+  /ci (GitHub Actions/Azure DevOps)
+```
+
+---
+
+## 10) 给 Cursor 的**详细任务列表**（按里程碑排序）
+
+> 说明：以下每个任务都包含**产出文件/目录、要点、验收标准**。将其逐条投喂给 Cursor，可自动生成工程与代码骨架。
+> **标注 [Win] / [Android] / [Shared]** 以区分平台。
+
+### 里程碑 M0：仓库与基础设施
+
+1. **[Shared] 初始化仓库与通用文件**
+
+   * 产出：`README.md`、`LICENSE`(MIT)、`.editorconfig`、`.gitattributes`
+   * 验收：README 说明项目目标与子模块；License 存在。
+2. **[Win] 新建 .NET 8 WPF 解决方案**
+
+   * 产出：`windows/AudioBridge.Windows.sln` + `App` 工程
+   * 验收：本地可编译启动空窗体。
+3. **[Android] 新建 Kotlin 应用（minSdk 24，targetSdk 34）**
+
+   * 产出：`android/app` Gradle 工程
+   * 验收：可运行空 Activity，启用 ViewBinding/Jetpack Compose（二选一，推荐 Compose）。
+
+### 里程碑 M1：协议与共享定义
+
+4. **[Shared] 定义控制通道 JSON Schema**
+
+   * 产出：`shared/schemas/control.json`
+   * 内容：`cmd`、`nowPlaying`、`telemetry` 等字段、示例。
+   * 验收：双方可加载并通过单元测试生成/解析样例。
+5. **[Shared] 定义 UDP 包结构与常量**
+
+   * 产出：`shared/docs/audio-packet.md`
+   * 内容：包头布局、密钥、nonce 计算、丢包窗口。
+   * 验收：包含位序/大小端说明和示例二进制。
+
+### 里程碑 M2：Windows 音频捕获与编码
+
+6. **[Win] 集成 NAudio，完成 WASAPI Loopback 捕获**
+
+   * 产出：`/App/Audio/LoopbackCapture.cs`
+   * 要点：选择默认输出设备、支持设备切换事件
+   * 验收：能抓取系统音频并输出 PCM 流（测试写 WAV）
+7. **[Win] 采样率/位深处理到 48kHz/16-bit**
+
+   * 产出：`/App/Audio/Resampler.cs`
+   * 验收：任意输入采样率都能转到 48k。
+8. **[Win] 集成 Concentus.Opus 编码器**
+
+   * 产出：`/App/Audio/OpusEncoder.cs`
+   * 参数：立体声、20 ms 帧、可调码率、VBR/CBR、FEC 可选
+   * 验收：输入 PCM -> 输出 Opus 帧，单元测试比对帧长/尺寸。
+
+### 里程碑 M3：UDP 音频通道（加密）
+
+9. **[Win] UDP 发送器 + 包装器（序号/时间戳/标志位）**
+
+   * 产出：`/App/Net/UdpAudioSender.cs`
+   * 验收：每帧发送一个数据报，丢包计数器。
+10. **[Win] AES-GCM 加密封装**
+
+    * 产出：`/App/Net/Crypto/AesGcmPacketProtector.cs`
+    * 验收：与 Android 端测试向量一致，解密成功。
+11. **[Android] UDP 接收器 + 抖动缓冲**
+
+    * 产出：`android/.../net/UdpAudioReceiver.kt`, `audio/JitterBuffer.kt`
+    * 验收：可按 `seq` 重排，目标缓冲 60–80ms，自适应微调。
+12. **[Android] AES-GCM 解密**
+
+    * 产出：`android/.../crypto/AesGcmPacketProtector.kt`
+    * 验收：通过与 Windows 的跨端测试向量。
+
+### 里程碑 M4：Opus 解码与播放
+
+13. **[Android] 集成 libopus（NDK）或 Concentus-Java（过渡）**
+
+    * 产出：`android/src/main/cpp/opus` + JNI 封装 或 `audio/OpusDecoder.kt`
+    * 验收：能将 UDP 到的帧解码为 PCM。
+14. **[Android] AudioTrack 低延迟播放管线**
+
+    * 产出：`audio/Player.kt`
+    * 要点：`STREAM_MUSIC`、`MODE_STREAM`、最小 buffer、快速路径
+    * 验收：可听见音频；首帧时间 < 200ms（测试环境）。
+
+### 里程碑 M5：控制通道与媒体控制
+
+15. **[Win] 自托管 WebSocket 控制服务**
+
+    * 产出：`/App/Net/ControlServer.cs`（Minimal API + WebSocket 中间件）
+    * 验收：可接收 JSON 指令并回传心跳。
+16. **[Android] WebSocket 客户端**
+
+    * 产出：`net/ControlClient.kt`
+    * 验收：可发送 `play/pause/next/prev`，收到 `nowPlaying`。
+17. **[Win] SMTC 媒体控制适配层**
+
+    * 产出：`/App/SMTC/MediaController.cs`
+    * 要点：当前活跃会话的 `Play/Pause/Next/Previous`；回退 SendInput 媒体键
+    * 验收：可控制 Spotify/Apple Music/浏览器媒体会话等。
+
+### 里程碑 M6：服务发现与配对
+
+18. **[Win] mDNS 广播服务**
+
+    * 产出：`/App/Discovery/MdnsAdvertiser.cs`
+    * 验收：Android 端可发现服务名/IP/端口。
+19. **[Android] NSDManager 发现实现**
+
+    * 产出：`net/Discovery.kt`
+    * 验收：展示设备列表，点击可连接。
+20. **[Win] 生成配对二维码**
+
+    * 产出：`/UI/PairingView.xaml` + `QrGenerator.cs`
+    * 验收：扫码后自动填充 host/port/key。
+21. **[Android] 扫码配对与密钥存储**
+
+    * 产出：`ui/PairingScreen.kt`、`data/KeyStore.kt`
+    * 验收：首次连接需验证 HMAC；成功后持久化。
+
+### 里程碑 M7：UI 与交互打磨
+
+22. **[Win] 主窗口与托盘 UI**
+
+    * 产出：`/UI/MainWindow.xaml`、`TrayIcon.xaml`
+    * 验收：可最小化到托盘；右键菜单功能完备。
+23. **[Android] 播放器界面 & 通知栏**
+
+    * 产出：`ui/PlayerScreen.kt`、`service/PlayerService.kt`
+    * 验收：MediaSession 生效，耳机键可控。
+24. **[Win] 设置面板（码率/帧长/设备/密钥）**
+
+    * 验收：修改即时生效或提示重启推流。
+
+### 里程碑 M8：稳定性与时延优化
+
+25. **[Android] 抖动缓冲自适应 & 漂移校正**
+
+    * 验收：长时间播放无卡顿，无明显音画漂移。
+26. **[Win] Opus FEC/丢包率自适应**
+
+    * 验收：模拟 5% 丢包仍连续可听。
+27. **[Shared] 遥测上报**
+
+    * 产出：定期上报 `latency/pktLoss/jitter/bitrate` 到 Android
+    * 验收：界面显示实时数值与图标颜色。
+
+### 里程碑 M9：打包与发布
+
+28. **[Win] 单文件发布 + 开机自启选项**
+
+    * 验收：安装后可选自启；首次启动生成密钥。
+29. **[Android] Release 构建 + 混淆**
+
+    * 验收：签名包可安装；前台服务保活策略生效。
+
+### 里程碑 M10：测试与文档
+
+30. **[Shared] 端到端测试脚本**
+
+    * 产出：`/tests/e2e.md`，说明如何测量时延（点击声/录音对齐）
+31. **[Shared] 故障排查指引**
+
+    * 产出：`/docs/troubleshooting.md`（端口占用/防火墙/设备切换）
+32. **[Shared] 安全审计清单**
+
+    * 产出：`/docs/security.md`（密钥存储/重放保护/日志脱敏）
+
+> ✅ 每个任务建议附带单元测试或本地可视化日志（将关键指标写入窗口状态栏/Android 调试页）。
+
+---
+
+## 11) 关键实现要点（代码骨架示例）
+
+> **说明**：以下是**接口层级与伪代码结构**，用于指引 Cursor 产出具体实现。
+
+### 11.1 Windows：音频与发送（C#）
+
+```csharp
+// Audio/LoopbackCapture.cs
+public sealed class LoopbackCapture : IDisposable {
+    public event Action<ReadOnlyMemory<float>> OnPcm; // 32f interleaved
+    public void Start(MMDevice device);
+    public void Stop();
+}
+
+// Audio/OpusEncoder.cs
+public sealed class OpusEncoderWrapper : IDisposable {
+    public OpusEncoderWrapper(int sampleRate = 48000, int channels = 2, int bitrateKb = 96, bool vbr = true, bool fec = false);
+    public int Encode(ReadOnlySpan<short> pcm16, Span<byte> opusOut); // returns length
+}
+
+// Net/UdpAudioSender.cs
+public sealed class UdpAudioSender {
+    public void Configure(IPEndPoint remote, byte keyId, byte[] aesKey, byte[] salt);
+    public void Send(ushort seq, uint ts48k, ReadOnlySpan<byte> opusFrame);
+}
+```
+
+### 11.2 Windows：控制与 SMTC（C#）
+
+```csharp
+// Net/ControlServer.cs
+app.Map("/control", async ctx => {
+    if (!Authenticate(ctx)) { ctx.Response.StatusCode = 401; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    await HandleControl(ws);
+});
+
+// SMTC/MediaController.cs
+public interface IMediaController {
+    Task PlayPauseAsync();
+    Task NextAsync();
+    Task PreviousAsync();
+    IAsyncEnumerable<NowPlaying> ObserveNowPlayingAsync();
+}
+```
+
+### 11.3 Android：接收与播放（Kotlin）
+
+```kotlin
+// net/UdpAudioReceiver.kt
+class UdpAudioReceiver(
+    val port: Int,
+    val crypto: AesGcmPacketProtector,
+    val jitter: JitterBuffer
+) {
+    fun start(onFrame: (seq: Int, ts48k: Int, frame: ByteArray) -> Unit)
+    fun stop()
+}
+
+// audio/JitterBuffer.kt
+class JitterBuffer(targetMs: Int = 70) {
+    fun push(seq: Int, ts: Int, payload: ByteArray)
+    fun pop(): ByteArray? // return next frame, null if not ready
+}
+
+// audio/Player.kt
+class Player {
+    fun start()
+    fun writeOpusFrame(frame: ByteArray) // 解码并写入 AudioTrack
+    fun stop()
+}
+```
+
+---
+
+## 12) 测试计划（摘录）
+
+* **环路时延测量**：PC 播放“滴答”脉冲 -> Android 录音对比 -> 计算峰值差；目标 < 120 ms。
+* **丢包鲁棒性**：路由器限速 + `tc/netem`（或 Android 端丢弃 N% 包） -> 观感不断流，PLC 生效。
+* **设备切换**：切换 Windows 默认播放设备 -> 2 秒内自动跟随并继续推流。
+* **媒体控制**：Spotify/本地播放器/浏览器 YouTube 均可被 play/pause/next/prev。
+
+---
+
+## 13) 风险与备选方案
+
+* **解码性能**：低端 Android 机型使用 Java 版 Opus 可能吃紧 → **优先 NDK/libopus**。
+* **网络抖动**：Wi‑Fi 条件差导致爆音 → 增大目标缓冲到 100–140 ms，并开启 FEC。
+* **SMTC 兼容**：少数应用不响应 SMTC → 回退为 SendInput 模拟媒体键。
+* **安全**：局域网仍有被动监听风险 → 保持 AES-GCM 开启；控制通道建议 HMAC 强制开启。
+* **替代方案**：若希望“零配置 + NAT 穿透 + 自适应带宽”，可添加 **WebRTC 模式**（Windows 端用 MixedReality-WebRTC / Android libwebrtc），但开发复杂度上升。
+
+---
+
+## 14) 许可证与合规
+
+* **Concentus (Opus C#)**：BSD/MIT 风格
+* **libopus**：BSD 风格
+* **NAudio**：MIT
+* **Zeroconf**：MIT
+* **OkHttp/ZXing**：Apache 2.0
+
+> 在 `LICENSES.md` 列出并保留三方版权声明。
+
+---
+
+## 15) 未来扩展
+
+* 多客户端同时播放（单播/组播）
+* 元数据封面传输（SMTC 抓取封面位图 -> WebSocket Base64）
+* Android 端录制保存本地（注意版权/合规）
+* 远程均衡器/音量正则化/混音
+* HTTP API/快捷键（Stream Deck 集成）
+
+---
