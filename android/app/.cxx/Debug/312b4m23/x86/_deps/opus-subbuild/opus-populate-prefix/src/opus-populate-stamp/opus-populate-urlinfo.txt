@@ -1,0 +1,3 @@
+repository='external project URL'
+module='https://github.com/xiph/opus/archive/refs/tags/v1.5.2.tar.gz'
+tag=''

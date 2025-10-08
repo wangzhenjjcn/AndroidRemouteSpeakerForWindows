@@ -15,6 +15,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 class MainActivity : AppCompatActivity() {
   private var receiver: PcmUdpReceiver? = null
   private var control: ControlClient? = null
+  private var nsd: com.audiobridge.app.net.NsdHelper? = null
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_main)
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     val statusText = findViewById<TextView>(R.id.statusText)
     val hostEdit = findViewById<EditText>(R.id.hostEdit)
     val ctrlPortEdit = findViewById<EditText>(R.id.ctrlPortEdit)
+    val btnDiscover = findViewById<Button>(R.id.btnDiscover)
     val btnPrev = findViewById<Button>(R.id.btnPrev)
     val btnPlayPause = findViewById<Button>(R.id.btnPlayPause)
     val btnNext = findViewById<Button>(R.id.btnNext)
@@ -106,6 +108,17 @@ class MainActivity : AppCompatActivity() {
         ControlClient.init(this)
         control?.openUpdateUrl(host, cp)
       }
+    }
+
+    btnDiscover.setOnClickListener {
+      if (nsd == null) nsd = com.audiobridge.app.net.NsdHelper(this)
+      nsd?.discover("_audiobridge._tcp.", onFound = { host, port, _ ->
+        runOnUiThread {
+          hostEdit.setText(host)
+          ctrlPortEdit.setText(port.toString())
+          statusText.text = "NSD: 已解析 $host:$port"
+        }
+      }, onStatus = { s -> runOnUiThread { statusText.text = s } })
     }
   }
 

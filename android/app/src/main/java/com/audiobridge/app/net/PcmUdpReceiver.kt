@@ -3,6 +3,7 @@ package com.audiobridge.app.net
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.audiobridge.app.codec.OpusBridge
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -20,6 +21,7 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
     th = thread(name = "pcm-udp-recv") {
       var socket: DatagramSocket? = null
       var track: AudioTrack? = null
+      var opus: OpusBridge? = null
       try {
         socket = DatagramSocket(null).apply {
           reuseAddress = true
@@ -35,7 +37,6 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
         var curSr = -1
         var curCh = -1
         var isOpus = false
-        var opus: Any? = null // OPUS 暂不解码
         // Jitter buffer (very simple): queue of PCM16 frames (short[]), target 3 frames
         val queue = java.util.ArrayDeque<ShortArray>()
         val lock = Object()
@@ -112,7 +113,37 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
             startWriterIfNeeded()
           }
           if (isOpus) {
-            // 暂不处理 OPUS
+            // 解析 OPUS 包：12B 头 + 可选 12B nonce + 16B tag
+            if (len >= 12) {
+              if (opus == null) opus = OpusBridge(48000, 2)
+              var payloadOff = off + 12
+              var payloadEnd = off + len
+              var payload: ByteArray? = null
+              val key = decodeBase64Url(pskBase64Url)
+              if (key != null && (key.size == 16 || key.size == 32) && len >= 12 + 12 + 16) {
+                try {
+                  val nonce = data.copyOfRange(payloadOff, payloadOff + 12)
+                  val tag = data.copyOfRange(payloadEnd - 16, payloadEnd)
+                  val cipher = data.copyOfRange(payloadOff + 12, payloadEnd - 16)
+                  payload = aesGcmDecrypt(key, nonce, cipher, tag)
+                } catch (_: Throwable) { payload = null }
+              }
+              if (payload == null) {
+                payload = data.copyOfRange(payloadOff, payloadEnd)
+              }
+              if (payload.isNotEmpty()) {
+                val pcm = ShortArray(960 * channels)
+                val n = try { opus!!.decode(payload, payload.size, pcm) } catch (_: Throwable) { 0 }
+                if (n > 0) {
+                  val out = if (n == pcm.size) pcm else pcm.copyOf(n)
+                  synchronized(lock) {
+                    queue.addLast(out)
+                    while (queue.size > 20) queue.removeFirst()
+                    onQueueStat?.invoke(queue.size)
+                  }
+                }
+              }
+            }
           } else {
             val frameSamplesPerCh = ((data[off + 7].toInt() and 0xFF) shl 8) or (data[off + 6].toInt() and 0xFF)
             val pcmLen = frameSamplesPerCh * channels * 2
@@ -171,6 +202,7 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
       } finally {
         try { track?.stop(); track?.release() } catch (_: Throwable) {}
         try { socket?.close() } catch (_: Throwable) {}
+        try { opus?.close() } catch (_: Throwable) {}
         writerRunning = false
       }
     }

@@ -47,11 +47,19 @@
               "target": "Package",
               "version": "[1.1.7, )"
             },
+            "Makaretu.Dns": {
+              "target": "Package",
+              "version": "[0.26.0, )"
+            },
             "Microsoft.NET.ILLink.Tasks": {
               "suppressParent": "All",
               "target": "Package",
               "version": "[8.0.20, )",
               "autoReferenced": true
+            },
+            "Mono.Zeroconf": {
+              "target": "Package",
+              "version": "[0.9.0, )"
             },
             "NAudio": {
               "target": "Package",
@@ -80,7 +88,7 @@
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
             },
-            "Microsoft.WindowsDesktop.App.WPF": {
+            "Microsoft.WindowsDesktop.App": {
               "privateAssets": "none"
             }
           },

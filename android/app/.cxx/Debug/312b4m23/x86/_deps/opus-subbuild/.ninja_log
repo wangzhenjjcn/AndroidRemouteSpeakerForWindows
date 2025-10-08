@@ -1,0 +1,21 @@
+# ninja log v5
+0	286	7816485863432393	opus-populate-prefix/src/opus-populate-stamp/opus-populate-mkdir	f6ce5f8df21ee9a0
+287	2731	7816485887870836	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-download	60580ae34da4ae3c
+3223	3338	7816485893957233	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-done	8f88f6a22b444b30
+2898	2980	7816485890354997	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-configure	4e952347811ea546
+0	286	7816485863432393	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-mkdir	f6ce5f8df21ee9a0
+3223	3338	7816485893957233	opus-populate-prefix/src/opus-populate-stamp/opus-populate-done	8f88f6a22b444b30
+3223	3338	7816485893957233	CMakeFiles/opus-populate-complete	8f88f6a22b444b30
+2820	2898	7816485889551275	opus-populate-prefix/src/opus-populate-stamp/opus-populate-patch	ed7953477199304f
+287	2731	7816485887870836	opus-populate-prefix/src/opus-populate-stamp/opus-populate-download	60580ae34da4ae3c
+2732	2819	7816485888752761	opus-populate-prefix/src/opus-populate-stamp/opus-populate-update	f8b07b7e10fde99f
+2732	2819	7816485888752761	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-update	f8b07b7e10fde99f
+2820	2898	7816485889551275	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-patch	ed7953477199304f
+3061	3139	7816485891956399	opus-populate-prefix/src/opus-populate-stamp/opus-populate-install	2ffd5431d0fa5f13
+2898	2980	7816485890354997	opus-populate-prefix/src/opus-populate-stamp/opus-populate-configure	4e952347811ea546
+2981	3061	7816485891175770	opus-populate-prefix/src/opus-populate-stamp/opus-populate-build	50cb8ae20ef27b8a
+2981	3061	7816485891175770	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-build	50cb8ae20ef27b8a
+3061	3139	7816485891956399	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-install	2ffd5431d0fa5f13
+3140	3223	7816485892792240	opus-populate-prefix/src/opus-populate-stamp/opus-populate-test	953065dc3909fad5
+3140	3223	7816485892792240	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/opus-populate-prefix/src/opus-populate-stamp/opus-populate-test	953065dc3909fad5
+3223	3338	7816485893957233	C:/Users/WangZhen/Documents/GitHub/AndroidSpeaker/android/app/.cxx/Debug/312b4m23/x86/_deps/opus-subbuild/CMakeFiles/opus-populate-complete	8f88f6a22b444b30

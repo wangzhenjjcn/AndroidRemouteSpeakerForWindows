@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
 using System.Windows;
+using WinForms = System.Windows.Forms;
+using Drawing = System.Drawing;
 using NAudio.CoreAudioApi;
 using AudioBridge.Windows.Audio;
 using AudioBridge.Windows.Net;
@@ -25,6 +27,11 @@ namespace AudioBridge.Windows
     private int _accumCount = 0;
     private int _lastSampleRate = 0;
     private int _lastChannels = 0;
+    private WinForms.NotifyIcon? _tray;
+    private WinForms.ToolStripMenuItem? _trayStartStopItem;
+    private WinForms.ToolStripMenuItem? _trayAutostartItem;
+    private bool _allowExit = false;
+    private AudioBridge.Windows.Net.MdnsPublisher? _mdns;
 
     public MainWindow()
     {
@@ -57,6 +64,92 @@ namespace AudioBridge.Windows
           }
         }
       }
+      InitTray();
+      this.StateChanged += (_, __) => UpdateTrayTexts();
+      this.Closing += (o, args) =>
+      {
+        if (!_allowExit)
+        {
+          args.Cancel = true;
+          this.Hide();
+          if (_tray != null)
+          {
+            try { _tray.BalloonTipTitle = "AudioBridge"; _tray.BalloonTipText = "程序已最小化到托盘"; _tray.ShowBalloonTip(1000); } catch { }
+          }
+        }
+      };
+    }
+
+    private void InitTray()
+    {
+      if (_tray != null) return;
+      _tray = new WinForms.NotifyIcon();
+      _tray.Icon = Drawing.SystemIcons.Application;
+      _tray.Text = "AudioBridge LAN";
+      _tray.Visible = true;
+      _tray.MouseClick += (_, e) =>
+      {
+        if (e.Button == WinForms.MouseButtons.Left)
+        {
+          ShowWindowFromTray();
+        }
+      };
+
+      var menu = new WinForms.ContextMenuStrip();
+      var miShow = new WinForms.ToolStripMenuItem("打开主界面");
+      miShow.Click += (_, __) => ShowWindowFromTray();
+      _trayStartStopItem = new WinForms.ToolStripMenuItem("开始推流");
+      _trayStartStopItem.Click += (_, __) =>
+      {
+        if (_isStreaming) StopStreaming(); else StartStreaming();
+        UpdateTrayTexts();
+      };
+      _trayAutostartItem = new WinForms.ToolStripMenuItem("开机自启");
+      _trayAutostartItem.CheckOnClick = true;
+      _trayAutostartItem.Checked = Settings.Load().Autostart;
+      _trayAutostartItem.CheckedChanged += (_, __) =>
+      {
+        SetAutostart(_trayAutostartItem.Checked);
+      };
+      var miExit = new WinForms.ToolStripMenuItem("退出");
+      miExit.Click += (_, __) => { _allowExit = true; _tray!.Visible = false; Close(); };
+
+      menu.Items.Add(miShow);
+      menu.Items.Add(_trayStartStopItem);
+      menu.Items.Add(new WinForms.ToolStripSeparator());
+      menu.Items.Add(_trayAutostartItem);
+      menu.Items.Add(new WinForms.ToolStripSeparator());
+      menu.Items.Add(miExit);
+      _tray.ContextMenuStrip = menu;
+      UpdateTrayTexts();
+    }
+
+    private void ShowWindowFromTray()
+    {
+      this.Show();
+      if (this.WindowState == WindowState.Minimized) this.WindowState = WindowState.Normal;
+      this.Activate();
+      UpdateTrayTexts();
+    }
+
+    private void UpdateTrayTexts()
+    {
+      try
+      {
+        if (_tray != null)
+        {
+          _tray.Text = _isStreaming ? "AudioBridge LAN - 推流中" : "AudioBridge LAN - 未推流";
+        }
+        if (_trayStartStopItem != null)
+        {
+          _trayStartStopItem.Text = _isStreaming ? "停止推流" : "开始推流";
+        }
+        if (_trayAutostartItem != null)
+        {
+          _trayAutostartItem.Checked = Settings.Load().Autostart;
+        }
+      }
+      catch { }
     }
 
     private void Menu_GenerateQr_Click(object sender, RoutedEventArgs e)
@@ -98,13 +191,18 @@ namespace AudioBridge.Windows
 
     private void Menu_About_Click(object sender, RoutedEventArgs e)
     {
-      MessageBox.Show("AudioBridge LAN\nWindows-Android 局域网音频桥接\n© 2025", "关于");
+      System.Windows.MessageBox.Show("AudioBridge LAN\nWindows-Android 局域网音频桥接\n© 2025", "关于");
     }
 
     private void Menu_Autostart_Click(object sender, RoutedEventArgs e)
     {
       var mi = sender as System.Windows.Controls.MenuItem;
       bool enable = mi?.IsChecked == true;
+      SetAutostart(enable);
+    }
+
+    private void SetAutostart(bool enable)
+    {
       try
       {
         var s = Settings.Load();
@@ -124,6 +222,7 @@ namespace AudioBridge.Windows
           key?.DeleteValue("AudioBridgeLAN", false);
           StatusText.Text = "已关闭开机自启";
         }
+        UpdateTrayTexts();
       }
       catch (Exception ex)
       {
@@ -198,6 +297,7 @@ namespace AudioBridge.Windows
         StatusText.Text = "状态：推流中，已生成二维码：" + path;
       }
       catch { }
+      UpdateTrayTexts();
     }
 
     private void StopStreaming()
@@ -212,6 +312,8 @@ namespace AudioBridge.Windows
       _isStreaming = false;
       StartStopButton.Content = "开始推流";
       StatusText.Text = "状态：未推流";
+      try { _mdns?.Stop(); } catch { }
+      UpdateTrayTexts();
     }
 
     private static AudioBridge.Windows.Net.ControlServer? _ctrl;
@@ -246,7 +348,17 @@ namespace AudioBridge.Windows
       };
       timer.AutoReset = true;
       timer.Start();
-      // mDNS 暂不启用，改为二维码配对
+      // 启动 mDNS 广播
+      try
+      {
+        var s = Settings.Load();
+        int ctrlPort = 8181;
+        int audioPort = int.TryParse(TargetPortBox.Text, out var tp) ? tp : 5004;
+        string name = System.Net.Dns.GetHostName();
+        _mdns ??= new AudioBridge.Windows.Net.MdnsPublisher();
+        _mdns.Start(name, ctrlPort, audioPort, s.PskBase64Url);
+      }
+      catch { }
     }
 
 
@@ -369,19 +481,50 @@ namespace AudioBridge.Windows
           int len = _opus.Encode(pcm16, opusBuf);
 
           // Header: 12B [ 'O''P''U''S'(4) | seq(2 LE) | ts48k(4 LE) | flags(1) | rsv(1) ]
-          Span<byte> packet = stackalloc byte[12 + len];
-          packet[0] = (byte)'O'; packet[1] = (byte)'P'; packet[2] = (byte)'U'; packet[3] = (byte)'S';
-          unchecked { packet[4] = (byte)(_seq & 0xFF); packet[5] = (byte)((_seq >> 8) & 0xFF); }
-          unchecked {
-            packet[6] = (byte)(_ts48k & 0xFF);
-            packet[7] = (byte)((_ts48k >> 8) & 0xFF);
-            packet[8] = (byte)((_ts48k >> 16) & 0xFF);
-            packet[9] = (byte)((_ts48k >> 24) & 0xFF);
+          var settings = Settings.Load();
+          var psk = settings.GetPskBytes();
+          bool doEncrypt = settings.UseEncryption && psk != null && (psk.Length == 16 || psk.Length == 32);
+          if (!doEncrypt)
+          {
+            Span<byte> packet = stackalloc byte[12 + len];
+            packet[0] = (byte)'O'; packet[1] = (byte)'P'; packet[2] = (byte)'U'; packet[3] = (byte)'S';
+            unchecked { packet[4] = (byte)(_seq & 0xFF); packet[5] = (byte)((_seq >> 8) & 0xFF); }
+            unchecked {
+              packet[6] = (byte)(_ts48k & 0xFF);
+              packet[7] = (byte)((_ts48k >> 8) & 0xFF);
+              packet[8] = (byte)((_ts48k >> 16) & 0xFF);
+              packet[9] = (byte)((_ts48k >> 24) & 0xFF);
+            }
+            packet[10] = 0; // flags
+            packet[11] = 0; // rsv
+            opusBuf.Slice(0, len).CopyTo(packet.Slice(12));
+            _udp.Send(packet);
           }
-          packet[10] = 0; // flags
-          packet[11] = 0; // rsv
-          opusBuf.Slice(0, len).CopyTo(packet.Slice(12));
-          _udp.Send(packet);
+          else
+          {
+            // 12(header) + 12(nonce) + cipher + 16(tag)
+            byte[] packet = new byte[12 + 12 + len + 16];
+            packet[0] = (byte)'O'; packet[1] = (byte)'P'; packet[2] = (byte)'U'; packet[3] = (byte)'S';
+            unchecked { packet[4] = (byte)(_seq & 0xFF); packet[5] = (byte)((_seq >> 8) & 0xFF); }
+            unchecked {
+              packet[6] = (byte)(_ts48k & 0xFF);
+              packet[7] = (byte)((_ts48k >> 8) & 0xFF);
+              packet[8] = (byte)((_ts48k >> 16) & 0xFF);
+              packet[9] = (byte)((_ts48k >> 24) & 0xFF);
+            }
+            packet[10] = 0; // flags
+            packet[11] = 0; // rsv
+            var nonce = new byte[12];
+            System.Security.Cryptography.RandomNumberGenerator.Fill(nonce);
+            Buffer.BlockCopy(nonce, 0, packet, 12, 12);
+            var plain = opusBuf.Slice(0, len).ToArray();
+            var cipher = new byte[len];
+            var tag = new byte[16];
+            Crypto.EncryptAesGcm(psk!, nonce, plain, cipher, tag);
+            Buffer.BlockCopy(cipher, 0, packet, 24, len);
+            Buffer.BlockCopy(tag, 0, packet, 24 + len, 16);
+            _udp.Send(packet);
+          }
           _seq++;
           _ts48k += (uint)frameSamplesPerCh;
 

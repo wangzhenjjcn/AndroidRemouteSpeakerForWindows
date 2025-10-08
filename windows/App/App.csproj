@@ -3,12 +3,15 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>AudioBridge.Windows</AssemblyName>
     <RootNamespace>AudioBridge.Windows</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Makaretu.Dns" Version="0.26.0" />
+    <PackageReference Include="Mono.Zeroconf" Version="0.9.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Concentus" Version="1.1.7" />
     <PackageReference Include="QRCoder" Version="1.5.3" />

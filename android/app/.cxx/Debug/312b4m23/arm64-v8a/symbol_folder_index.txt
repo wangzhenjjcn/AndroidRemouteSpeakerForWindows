@@ -1,0 +1,1 @@
+C:\Users\WangZhen\Documents\GitHub\AndroidSpeaker\android\app\build\intermediates\cxx\Debug\312b4m23\obj\arm64-v8a

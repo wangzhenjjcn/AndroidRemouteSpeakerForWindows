@@ -18,6 +18,22 @@
           }
         }
       },
+      "Makaretu.Dns/1.0.0": {
+        "type": "package",
+        "dependencies": {
+          "SimpleBase": "1.3.1"
+        },
+        "compile": {
+          "lib/netstandard2.0/Makaretu.Dns.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/netstandard2.0/Makaretu.Dns.dll": {
+            "related": ".xml"
+          }
+        }
+      },
       "Microsoft.NET.ILLink.Tasks/8.0.20": {
         "type": "package",
         "build": {
@@ -102,6 +118,17 @@
             "assetType": "runtime",
             "rid": "win"
           }
+        }
+      },
+      "Mono.Zeroconf/0.9.0": {
+        "type": "package",
+        "compile": {
+          "lib/Net20/Mono.Zeroconf.Providers.Bonjour.dll": {},
+          "lib/Net20/Mono.Zeroconf.dll": {}
+        },
+        "runtime": {
+          "lib/Net20/Mono.Zeroconf.Providers.Bonjour.dll": {},
+          "lib/Net20/Mono.Zeroconf.dll": {}
         }
       },
       "NAudio/2.2.1": {
@@ -334,6 +361,19 @@
         },
         "runtime": {
           "lib/netstandard1.0/_._": {}
+        }
+      },
+      "SimpleBase/1.3.1": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard1.3/SimpleBase.dll": {
+            "related": ".pdb"
+          }
+        },
+        "runtime": {
+          "lib/netstandard1.3/SimpleBase.dll": {
+            "related": ".pdb"
+          }
         }
       },
       "System.AppContext/4.1.0": {
@@ -1460,6 +1500,22 @@
           }
         }
       },
+      "Makaretu.Dns/1.0.0": {
+        "type": "package",
+        "dependencies": {
+          "SimpleBase": "1.3.1"
+        },
+        "compile": {
+          "lib/netstandard2.0/Makaretu.Dns.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/netstandard2.0/Makaretu.Dns.dll": {
+            "related": ".xml"
+          }
+        }
+      },
       "Microsoft.NET.ILLink.Tasks/8.0.20": {
         "type": "package",
         "build": {
@@ -1529,6 +1585,17 @@
         },
         "build": {
           "buildTransitive/netcoreapp3.1/_._": {}
+        }
+      },
+      "Mono.Zeroconf/0.9.0": {
+        "type": "package",
+        "compile": {
+          "lib/Net20/Mono.Zeroconf.Providers.Bonjour.dll": {},
+          "lib/Net20/Mono.Zeroconf.dll": {}
+        },
+        "runtime": {
+          "lib/Net20/Mono.Zeroconf.Providers.Bonjour.dll": {},
+          "lib/Net20/Mono.Zeroconf.dll": {}
         }
       },
       "NAudio/2.2.1": {
@@ -2048,6 +2115,19 @@
         },
         "runtime": {
           "runtimes/win/lib/netstandard1.5/System.Runtime.Extensions.dll": {}
+        }
+      },
+      "SimpleBase/1.3.1": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard1.3/SimpleBase.dll": {
+            "related": ".pdb"
+          }
+        },
+        "runtime": {
+          "lib/netstandard1.3/SimpleBase.dll": {
+            "related": ".pdb"
+          }
         }
       },
       "System.AppContext/4.1.0": {
@@ -3159,6 +3239,25 @@
         "lib/portable-net45+win+wpa81+wp80/Concentus.pdb"
       ]
     },
+    "Makaretu.Dns/1.0.0": {
+      "sha512": "2rgINbYXXa/VteIeymlBEsdKyVyHsw4i9KkyyGIbTYhTJSzvYH1azrpBuVolG2eAbnhMsl5s1ZlwdkRazm+rgA==",
+      "type": "package",
+      "path": "makaretu.dns/1.0.0",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "lib/net45/Makaretu.Dns.dll",
+        "lib/net45/Makaretu.Dns.xml",
+        "lib/net472/Makaretu.Dns.dll",
+        "lib/net472/Makaretu.Dns.xml",
+        "lib/netstandard1.4/Makaretu.Dns.dll",
+        "lib/netstandard1.4/Makaretu.Dns.xml",
+        "lib/netstandard2.0/Makaretu.Dns.dll",
+        "lib/netstandard2.0/Makaretu.Dns.xml",
+        "makaretu.dns.1.0.0.nupkg.sha512",
+        "makaretu.dns.nuspec"
+      ]
+    },
     "Microsoft.NET.ILLink.Tasks/8.0.20": {
       "sha512": "Rhcto2AjGvTO62+/VTmBpumBOmqIGp7nYEbTbmEXkCq4yPGxV8whju3/HsIA/bKyo2+DggaYk5+/8sxb1AbPTw==",
       "type": "package",
@@ -3354,6 +3453,24 @@
         "runtimes/win/lib/netcoreapp3.1/Microsoft.Win32.SystemEvents.dll",
         "runtimes/win/lib/netcoreapp3.1/Microsoft.Win32.SystemEvents.xml",
         "useSharedDesignerContext.txt"
+      ]
+    },
+    "Mono.Zeroconf/0.9.0": {
+      "sha512": "hwCQh7RYAvBrF66Yum+Vc2SaPqOHYpT0aineUZTJLJyii//vp7Lt7mwWwlC5nZ+9111HvC6Ib519BNWfUkjKxg==",
+      "type": "package",
+      "path": "mono.zeroconf/0.9.0",
+      "hasTools": true,
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "NuGet.exe",
+        "lib/Net20/Mono.Zeroconf.Providers.Bonjour.dll",
+        "lib/Net20/Mono.Zeroconf.dll",
+        "mono.zeroconf.0.9.0.nupkg.sha512",
+        "mono.zeroconf.nuspec",
+        "tools/MZClient.exe",
+        "tools/Mono.Zeroconf.Providers.Bonjour.dll",
+        "tools/Mono.Zeroconf.dll"
       ]
     },
     "NAudio/2.2.1": {
@@ -4128,6 +4245,21 @@
         "runtimes/win/lib/net/_._",
         "runtimes/win/lib/netcore50/System.Runtime.Extensions.dll",
         "runtimes/win/lib/netstandard1.5/System.Runtime.Extensions.dll"
+      ]
+    },
+    "SimpleBase/1.3.1": {
+      "sha512": "TqqQc+WFg3s10/PdnI2Dio0U7xEmVXhkf+ey4tOGZzjyd054rnNOLNVahJhMYmfBQdS7/jkVqC8xzLm/bkR3EA==",
+      "type": "package",
+      "path": "simplebase/1.3.1",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "lib/net45/SimpleBase.dll",
+        "lib/net45/SimpleBase.pdb",
+        "lib/netstandard1.3/SimpleBase.dll",
+        "lib/netstandard1.3/SimpleBase.pdb",
+        "simplebase.1.3.1.nupkg.sha512",
+        "simplebase.nuspec"
       ]
     },
     "System.AppContext/4.1.0": {
@@ -7287,7 +7419,9 @@
   "projectFileDependencyGroups": {
     "net8.0-windows7.0": [
       "Concentus >= 1.1.7",
+      "Makaretu.Dns >= 0.26.0",
       "Microsoft.NET.ILLink.Tasks >= 8.0.20",
+      "Mono.Zeroconf >= 0.9.0",
       "NAudio >= 2.2.1",
       "QRCoder >= 1.5.3"
     ]
@@ -7338,11 +7472,19 @@
             "target": "Package",
             "version": "[1.1.7, )"
           },
+          "Makaretu.Dns": {
+            "target": "Package",
+            "version": "[0.26.0, )"
+          },
           "Microsoft.NET.ILLink.Tasks": {
             "suppressParent": "All",
             "target": "Package",
             "version": "[8.0.20, )",
             "autoReferenced": true
+          },
+          "Mono.Zeroconf": {
+            "target": "Package",
+            "version": "[0.9.0, )"
           },
           "NAudio": {
             "target": "Package",
@@ -7371,7 +7513,7 @@
           "Microsoft.NETCore.App": {
             "privateAssets": "all"
           },
-          "Microsoft.WindowsDesktop.App.WPF": {
+          "Microsoft.WindowsDesktop.App": {
             "privateAssets": "none"
           }
         },
@@ -7389,11 +7531,32 @@
       "code": "NU1603",
       "level": "Warning",
       "warningLevel": 1,
+      "message": "AudioBridge.Windows 依赖于 Makaretu.Dns (>= 0.26.0)，但找不到 Makaretu.Dns 0.26.0。 已解决 Makaretu.Dns 1.0.0 的近似最佳匹配。 ",
+      "libraryId": "Makaretu.Dns",
+      "targetGraphs": [
+        "net8.0-windows7.0",
+        "net8.0-windows7.0/win-x64"
+      ]
+    },
+    {
+      "code": "NU1603",
+      "level": "Warning",
+      "warningLevel": 1,
       "message": "AudioBridge.Windows 依赖于 QRCoder (>= 1.5.3)，但找不到 QRCoder 1.5.3。 已解决 QRCoder 1.6.0 的近似最佳匹配。 ",
       "libraryId": "QRCoder",
       "targetGraphs": [
         "net8.0-windows7.0",
         "net8.0-windows7.0/win-x64"
+      ]
+    },
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "已使用“.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1”而不是项目目标框架“net8.0-windows7.0”还原包“Mono.Zeroconf 0.9.0”。此包可能与项目不完全兼容。",
+      "libraryId": "Mono.Zeroconf",
+      "targetGraphs": [
+        "net8.0-windows7.0"
       ]
     }
   ]
