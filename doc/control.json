@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ControlChannel",
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "cmd" },
+        "action": { "enum": ["play", "pause", "next", "prev", "seek"] },
+        "value": { "type": "number" }
+      },
+      "required": ["type", "action"]
+    },
+    {
+      "properties": {
+        "type": { "const": "nowPlaying" },
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "album": { "type": "string" },
+        "positionMs": { "type": "number" },
+        "durationMs": { "type": "number" },
+        "app": { "type": "string" }
+      },
+      "required": ["type", "title", "positionMs", "durationMs"]
+    },
+    {
+      "properties": {
+        "type": { "const": "telemetry" },
+        "latencyMs": { "type": "number" },
+        "pktLossPct": { "type": "number" },
+        "jitterMs": { "type": "number" }
+      },
+      "required": ["type", "latencyMs"]
+    }
+  ]
+}
+
+
