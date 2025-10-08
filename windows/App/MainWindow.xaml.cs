@@ -42,6 +42,10 @@ namespace AudioBridge.Windows
       TargetPortBox.Text = s.TargetPort.ToString();
       BitrateSlider.Value = s.BitrateKbps;
       UseOpusCheck.IsChecked = s.UseOpus;
+      var m = this.FindName("MenuUseEncryption") as System.Windows.Controls.MenuItem;
+      if (m != null) m.IsChecked = s.UseEncryption;
+      var ma = this.FindName("MenuAutostart") as System.Windows.Controls.MenuItem;
+      if (ma != null) ma.IsChecked = s.Autostart;
       if (!string.IsNullOrWhiteSpace(s.DeviceId))
       {
         var devices = DeviceCombo.ItemsSource as System.Collections.IEnumerable;
@@ -52,6 +56,78 @@ namespace AudioBridge.Windows
             if (d is MMDevice md && md.ID == s.DeviceId) { DeviceCombo.SelectedItem = d; break; }
           }
         }
+      }
+    }
+
+    private void Menu_GenerateQr_Click(object sender, RoutedEventArgs e)
+    {
+      try
+      {
+        var s = Settings.Load();
+        string host = System.Net.Dns.GetHostName();
+        int ctrlPort = 8181;
+        int audioPort = int.TryParse(TargetPortBox.Text, out var tp) ? tp : 5004;
+        string path = AudioBridge.Windows.Net.QrHelper.GeneratePairQrPng(host, ctrlPort, audioPort, s.PskBase64Url);
+        StatusText.Text = "已生成二维码：" + path;
+      }
+      catch (Exception ex)
+      {
+        StatusText.Text = "生成二维码失败：" + ex.Message;
+      }
+    }
+
+    private void Menu_Exit_Click(object sender, RoutedEventArgs e)
+    {
+      Close();
+    }
+
+    private void Menu_UseEncryption_Click(object sender, RoutedEventArgs e)
+    {
+      var mi = sender as System.Windows.Controls.MenuItem;
+      var s = Settings.Load();
+      s.UseEncryption = mi?.IsChecked == true;
+      s.Save();
+      StatusText.Text = s.UseEncryption ? "已启用加密（需客户端 PSK 一致）" : "已关闭加密";
+    }
+
+    private void Menu_CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+      // 简单提示：Android 端在 控制端口/download/app-debug.apk 下载
+      StatusText.Text = "更新包路由：/download/app-debug.apk";
+    }
+
+    private void Menu_About_Click(object sender, RoutedEventArgs e)
+    {
+      MessageBox.Show("AudioBridge LAN\nWindows-Android 局域网音频桥接\n© 2025", "关于");
+    }
+
+    private void Menu_Autostart_Click(object sender, RoutedEventArgs e)
+    {
+      var mi = sender as System.Windows.Controls.MenuItem;
+      bool enable = mi?.IsChecked == true;
+      try
+      {
+        var s = Settings.Load();
+        s.Autostart = enable;
+        s.Save();
+        const string runKey = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        string name = "AudioBridgeLAN";
+        if (enable)
+        {
+          string exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+          Microsoft.Win32.Registry.SetValue(runKey, name, '"' + exe + '"');
+          StatusText.Text = "已启用开机自启";
+        }
+        else
+        {
+          using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+          key?.DeleteValue("AudioBridgeLAN", false);
+          StatusText.Text = "已关闭开机自启";
+        }
+      }
+      catch (Exception ex)
+      {
+        StatusText.Text = "开机自启设置失败：" + ex.Message;
       }
     }
 
@@ -211,7 +287,7 @@ namespace AudioBridge.Windows
             int headerLen = 8;
             var settings = Settings.Load();
             var psk = settings.GetPskBytes();
-            bool doEncrypt = psk != null && (psk.Length == 16 || psk.Length == 32);
+            bool doEncrypt = settings.UseEncryption && psk != null && (psk.Length == 16 || psk.Length == 32);
             int frameBytes = frameSamplesPcm * 2;
             if (!doEncrypt)
             {
@@ -274,7 +350,7 @@ namespace AudioBridge.Windows
             _accumCount -= frameSamplesPcm;
             if (_accumCount > 0)
             {
-              Array.Copy(_accum, frameSamplesPerChPcm, _accum, 0, _accumCount);
+              Array.Copy(_accum, frameSamplesPcm, _accum, 0, _accumCount);
             }
           }
           return;

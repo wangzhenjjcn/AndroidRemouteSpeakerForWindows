@@ -2,7 +2,23 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="AudioBridge LAN" Height="440" Width="720">
-  <Grid Margin="16">
+  <DockPanel>
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="文件(_F)">
+        <MenuItem Header="生成配对二维码" Click="Menu_GenerateQr_Click"/>
+        <Separator/>
+        <MenuItem Header="退出" Click="Menu_Exit_Click"/>
+      </MenuItem>
+      <MenuItem Header="设置(_S)">
+        <MenuItem x:Name="MenuUseEncryption" Header="使用加密(AES-GCM)" IsCheckable="True" Click="Menu_UseEncryption_Click"/>
+        <MenuItem x:Name="MenuAutostart" Header="开机自启" IsCheckable="True" Click="Menu_Autostart_Click"/>
+      </MenuItem>
+      <MenuItem Header="帮助(_H)">
+        <MenuItem Header="检查更新" Click="Menu_CheckUpdate_Click"/>
+        <MenuItem Header="关于" Click="Menu_About_Click"/>
+      </MenuItem>
+    </Menu>
+    <Grid Margin="16">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
@@ -49,7 +65,8 @@
     </Border>
 
     <TextBlock Grid.Row="2" Foreground="#777" Text="提示：当前为基础控制界面，后续将接入 Opus 编码、UDP 推流与控制通道。"/>
-  </Grid>
+    </Grid>
+  </DockPanel>
 </Window>
 
 

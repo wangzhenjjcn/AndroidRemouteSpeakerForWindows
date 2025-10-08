@@ -60,6 +60,21 @@ class ControlClient(private val onState: (String) -> Unit) {
     } catch (_: Throwable) { null }
   }
 
+  fun openUpdateUrl(host: String, port: Int, file: String = "app-debug.apk") {
+    val url = "http://$host:$port/download/$file"
+    try {
+      val ctx = appCtx ?: return
+      val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+      intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+      ctx.startActivity(intent)
+    } catch (_: Throwable) {}
+  }
+
+  companion object {
+    @Volatile private var appCtx: android.content.Context? = null
+    fun init(ctx: android.content.Context) { appCtx = ctx.applicationContext }
+  }
+
   fun sendCmd(action: String, value: Int = 0) {
     val json = "{" +
       "\"type\":\"cmd\"," +

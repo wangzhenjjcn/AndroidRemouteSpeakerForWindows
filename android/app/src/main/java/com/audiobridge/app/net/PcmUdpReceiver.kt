@@ -66,8 +66,11 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
         }
         while (running) {
           socket.receive(pkt)
-          if (pkt.length < 8) continue
-          if (buf[0].toInt() == 'O'.code && buf[1].toInt() == 'P'.code && pkt.length >= 12) {
+          val data = pkt.data
+          val off = pkt.offset
+          val len = pkt.length
+          if (len < 8) continue
+          if (data[off + 0].toInt() == 'O'.code && data[off + 1].toInt() == 'P'.code && len >= 12) {
             // OPUS
             isOpus = true
             sampleRate = 48000
@@ -76,8 +79,8 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
           } else {
             // PCM header: 8B [sr(4) ch(2) frame(2)] little-endian
             isOpus = false
-            sampleRate = ((buf[3].toInt() and 0xFF) shl 24) or ((buf[2].toInt() and 0xFF) shl 16) or ((buf[1].toInt() and 0xFF) shl 8) or (buf[0].toInt() and 0xFF)
-            channels = ((buf[5].toInt() and 0xFF) shl 8) or (buf[4].toInt() and 0xFF)
+            sampleRate = ((data[off + 3].toInt() and 0xFF) shl 24) or ((data[off + 2].toInt() and 0xFF) shl 16) or ((data[off + 1].toInt() and 0xFF) shl 8) or (data[off + 0].toInt() and 0xFF)
+            channels = ((data[off + 5].toInt() and 0xFF) shl 8) or (data[off + 4].toInt() and 0xFF)
             if (sampleRate <= 0) { sampleRate = 48000 }
             if (channels != 1 && channels != 2) { channels = 2 }
           }
@@ -111,34 +114,16 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
           if (isOpus) {
             // 暂不处理 OPUS
           } else {
-            val frameSamplesPerCh = ((buf[7].toInt() and 0xFF) shl 8) or (buf[6].toInt() and 0xFF)
+            val frameSamplesPerCh = ((data[off + 7].toInt() and 0xFF) shl 8) or (data[off + 6].toInt() and 0xFF)
             val pcmLen = frameSamplesPerCh * channels * 2
-            if (pkt.length >= 8 + pcmLen) {
-              // enqueue
-              val shorts = ShortArray(frameSamplesPerCh * channels)
-              var si = 0
-              var bi = 8
-              val end = 8 + pcmLen
-              while (bi + 1 < end) {
-                val lo = (pkt.data[bi].toInt() and 0xFF)
-                val hi = (pkt.data[bi + 1].toInt() and 0xFF)
-                shorts[si++] = ((hi shl 8) or lo).toShort()
-                bi += 2
-              }
-              synchronized(lock) {
-                queue.addLast(shorts)
-                // limit queue to 20 frames (~400ms upper bound)
-                while (queue.size > 20) queue.removeFirst()
-                onQueueStat?.invoke(queue.size)
-              }
-            } else if (pkt.length >= 8 + 12 + 16) {
-              // 尝试 AES-GCM 解密：header(8)+nonce(12)+cipher+tag(16)
+            // 先尝试加密载荷
+            if (len >= 8 + 12 + 16) {
               val key = decodeBase64Url(pskBase64Url)
               if (key != null && (key.size == 16 || key.size == 32)) {
                 try {
-                  val nonce = pkt.data.copyOfRange(8, 20)
-                  val cipher = pkt.data.copyOfRange(20, pkt.length - 16)
-                  val tag = pkt.data.copyOfRange(pkt.length - 16, pkt.length)
+                  val nonce = data.copyOfRange(off + 8, off + 20)
+                  val cipher = data.copyOfRange(off + 20, off + len - 16)
+                  val tag = data.copyOfRange(off + len - 16, off + len)
                   val plain = aesGcmDecrypt(key, nonce, cipher, tag)
                   if (plain != null && plain.size % 2 == 0) {
                     val shorts = ShortArray(plain.size / 2)
@@ -155,8 +140,29 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
                       while (queue.size > 20) queue.removeFirst()
                       onQueueStat?.invoke(queue.size)
                     }
+                    continue
                   }
                 } catch (_: Throwable) {}
+              }
+            }
+            // 再尝试明文
+            if (len >= 8 + pcmLen) {
+              // enqueue
+              val shorts = ShortArray(frameSamplesPerCh * channels)
+              var si = 0
+              var bi = off + 8
+              val end = off + 8 + pcmLen
+              while (bi + 1 < end) {
+                val lo = (data[bi].toInt() and 0xFF)
+                val hi = (data[bi + 1].toInt() and 0xFF)
+                shorts[si++] = ((hi shl 8) or lo).toShort()
+                bi += 2
+              }
+              synchronized(lock) {
+                queue.addLast(shorts)
+                // limit queue to 20 frames (~400ms upper bound)
+                while (queue.size > 20) queue.removeFirst()
+                onQueueStat?.invoke(queue.size)
               }
             }
           }

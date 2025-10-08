@@ -11,6 +11,8 @@ namespace AudioBridge.Windows.Config
     public int TargetPort { get; set; } = 5004;
     public int BitrateKbps { get; set; } = 96;
     public bool UseOpus { get; set; } = false;
+    public bool UseEncryption { get; set; } = false;
+    public bool Autostart { get; set; } = false;
     public string? DeviceId { get; set; }
     public string? PskBase64Url { get; set; }
     private static string GetFolder()

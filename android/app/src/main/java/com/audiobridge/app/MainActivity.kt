@@ -18,6 +18,16 @@ class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_main)
+    // 权限请求（相机/通知）
+    val needCamera = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (needCamera) {
+      androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.CAMERA), 200)
+    }
+    if (android.os.Build.VERSION.SDK_INT >= 33) {
+      if (!androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+        androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 201)
+      }
+    }
     val portEdit = findViewById<EditText>(R.id.portEdit)
     val startBtn = findViewById<Button>(R.id.startBtn)
     val stopBtn = findViewById<Button>(R.id.stopBtn)
@@ -29,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     val btnNext = findViewById<Button>(R.id.btnNext)
     val pskEdit = findViewById<EditText>(R.id.pskEdit)
     val btnScan = findViewById<Button>(R.id.btnScan)
+    val btnCheckUpdate = findViewById<Button>(R.id.btnCheckUpdate)
 
     startBtn.setOnClickListener {
       try {
@@ -86,6 +97,15 @@ class MainActivity : AppCompatActivity() {
     btnScan.setOnClickListener {
       val options = ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描配对二维码")
       scanLauncher.launch(options)
+    }
+
+    btnCheckUpdate.setOnClickListener {
+      val host = hostEdit.text?.toString()?.trim().orEmpty()
+      val cp = ctrlPortEdit.text?.toString()?.toIntOrNull() ?: 8181
+      if (host.isNotEmpty()) {
+        ControlClient.init(this)
+        control?.openUpdateUrl(host, cp)
+      }
     }
   }
 

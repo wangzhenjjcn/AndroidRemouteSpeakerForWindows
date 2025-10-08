@@ -41,7 +41,8 @@ namespace AudioBridge.Windows.Net
 
     private async Task HandleRequestAsync(HttpContext context)
     {
-      if (context.WebSockets.IsWebSocketRequest)
+      var path = context.Request.Path.Value ?? "/";
+      if (path.StartsWith("/control") && context.WebSockets.IsWebSocketRequest)
       {
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var id = Guid.NewGuid();
@@ -56,8 +57,39 @@ namespace AudioBridge.Windows.Net
         }
         return;
       }
+      if (path.StartsWith("/download/"))
+      {
+        var file = path.Substring("/download/".Length);
+        var apkPath = ResolveApkPath(file);
+        if (!string.IsNullOrEmpty(apkPath) && System.IO.File.Exists(apkPath))
+        {
+          context.Response.ContentType = "application/vnd.android.package-archive";
+          await context.Response.SendFileAsync(apkPath);
+          return;
+        }
+        context.Response.StatusCode = 404;
+        await context.Response.WriteAsync("Not Found");
+        return;
+      }
       context.Response.StatusCode = 200;
       await context.Response.WriteAsync("AudioBridge ControlServer");
+    }
+
+    private static string? ResolveApkPath(string file)
+    {
+      try
+      {
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        // try ../Android/app-debug.apk relative to dist/*
+        var distDir = System.IO.Directory.GetParent(baseDir)?.Parent?.FullName;
+        if (!string.IsNullOrEmpty(distDir))
+        {
+          var p = System.IO.Path.Combine(distDir, "Android", file);
+          if (System.IO.File.Exists(p)) return p;
+        }
+      }
+      catch { }
+      return null;
     }
 
     private async Task EchoLoopAsync(WebSocket ws)
