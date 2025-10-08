@@ -8,7 +8,7 @@ import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import kotlin.concurrent.thread
 
-class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int) -> Unit)? = null) {
+class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int) -> Unit)? = null, private val pskBase64Url: String? = null) {
   @Volatile private var running = false
   private var th: Thread? = null
   @Volatile private var writerRunning = false
@@ -35,6 +35,7 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
         var curSr = -1
         var curCh = -1
         var isOpus = false
+        var opus: Any? = null // OPUS 暂不解码
         // Jitter buffer (very simple): queue of PCM16 frames (short[]), target 3 frames
         val queue = java.util.ArrayDeque<ShortArray>()
         val lock = Object()
@@ -71,6 +72,7 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
             isOpus = true
             sampleRate = 48000
             channels = 2
+            // OPUS 暂不解码
           } else {
             // PCM header: 8B [sr(4) ch(2) frame(2)] little-endian
             isOpus = false
@@ -107,7 +109,7 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
             startWriterIfNeeded()
           }
           if (isOpus) {
-            // 暂时不解码（移除 Concentus 依赖），回落忽略 OPUS 包；后续再接入。
+            // 暂不处理 OPUS
           } else {
             val frameSamplesPerCh = ((buf[7].toInt() and 0xFF) shl 8) or (buf[6].toInt() and 0xFF)
             val pcmLen = frameSamplesPerCh * channels * 2
@@ -128,6 +130,33 @@ class PcmUdpReceiver(private val listenPort: Int, private val onQueueStat: ((Int
                 // limit queue to 20 frames (~400ms upper bound)
                 while (queue.size > 20) queue.removeFirst()
                 onQueueStat?.invoke(queue.size)
+              }
+            } else if (pkt.length >= 8 + 12 + 16) {
+              // 尝试 AES-GCM 解密：header(8)+nonce(12)+cipher+tag(16)
+              val key = decodeBase64Url(pskBase64Url)
+              if (key != null && (key.size == 16 || key.size == 32)) {
+                try {
+                  val nonce = pkt.data.copyOfRange(8, 20)
+                  val cipher = pkt.data.copyOfRange(20, pkt.length - 16)
+                  val tag = pkt.data.copyOfRange(pkt.length - 16, pkt.length)
+                  val plain = aesGcmDecrypt(key, nonce, cipher, tag)
+                  if (plain != null && plain.size % 2 == 0) {
+                    val shorts = ShortArray(plain.size / 2)
+                    var si = 0
+                    var bi = 0
+                    while (bi + 1 < plain.size) {
+                      val lo = (plain[bi].toInt() and 0xFF)
+                      val hi = (plain[bi + 1].toInt() and 0xFF)
+                      shorts[si++] = ((hi shl 8) or lo).toShort()
+                      bi += 2
+                    }
+                    synchronized(lock) {
+                      queue.addLast(shorts)
+                      while (queue.size > 20) queue.removeFirst()
+                      onQueueStat?.invoke(queue.size)
+                    }
+                  }
+                } catch (_: Throwable) {}
               }
             }
           }

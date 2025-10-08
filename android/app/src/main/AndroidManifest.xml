@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -8,6 +9,9 @@
         android:label="AudioBridge"
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        <service
+            android:name=".service.AudioBridgeService"
+            android:exported="false"/>
         <activity
             android:name=".MainActivity"
             android:exported="true">

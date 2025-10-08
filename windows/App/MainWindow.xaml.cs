@@ -111,6 +111,17 @@ namespace AudioBridge.Windows
       StatusText.Text = "状态：推流中  码率=" + _bitrateKbps + " kbps";
       // start control server for basic commands
       _ = EnsureControlServerStarted();
+      // 生成配对二维码
+      try
+      {
+        var s = Settings.Load();
+        string host = System.Net.Dns.GetHostName();
+        int ctrlPort = 8181;
+        int audioPort = int.TryParse(TargetPortBox.Text, out var tp) ? tp : 5004;
+        string path = AudioBridge.Windows.Net.QrHelper.GeneratePairQrPng(host, ctrlPort, audioPort, s.PskBase64Url);
+        StatusText.Text = "状态：推流中，已生成二维码：" + path;
+      }
+      catch { }
     }
 
     private void StopStreaming()
@@ -144,7 +155,24 @@ namespace AudioBridge.Windows
         }
         await System.Threading.Tasks.Task.CompletedTask;
       });
+      // start simple telemetry timer
+      var timer = new System.Timers.Timer(1000);
+      timer.Elapsed += async (_, __) =>
+      {
+        try
+        {
+          if (_ctrl != null)
+          {
+            await _ctrl.BroadcastAsync(new { type = "telemetry", latencyMs = 0, pktLossPct = 0.0, jitterMs = 0 });
+          }
+        }
+        catch { }
+      };
+      timer.AutoReset = true;
+      timer.Start();
+      // mDNS 暂不启用，改为二维码配对
     }
+
 
     private void OnPcm(ReadOnlyMemory<float> pcm)
     {
@@ -181,32 +209,72 @@ namespace AudioBridge.Windows
           while (_accumCount >= frameSamplesPcm)
           {
             int headerLen = 8;
-            Span<byte> payload = stackalloc byte[headerLen + frameSamplesPcm * 2];
-            unchecked
+            var settings = Settings.Load();
+            var psk = settings.GetPskBytes();
+            bool doEncrypt = psk != null && (psk.Length == 16 || psk.Length == 32);
+            int frameBytes = frameSamplesPcm * 2;
+            if (!doEncrypt)
             {
-              payload[0] = (byte)(sampleRate & 0xFF);
-              payload[1] = (byte)((sampleRate >> 8) & 0xFF);
-              payload[2] = (byte)((sampleRate >> 16) & 0xFF);
-              payload[3] = (byte)((sampleRate >> 24) & 0xFF);
-              payload[4] = (byte)(channels & 0xFF);
-              payload[5] = (byte)((channels >> 8) & 0xFF);
-              payload[6] = (byte)(frameSamplesPerChPcm & 0xFF);
-              payload[7] = (byte)((frameSamplesPerChPcm >> 8) & 0xFF);
+              Span<byte> payload = stackalloc byte[headerLen + frameBytes];
+              unchecked
+              {
+                payload[0] = (byte)(sampleRate & 0xFF);
+                payload[1] = (byte)((sampleRate >> 8) & 0xFF);
+                payload[2] = (byte)((sampleRate >> 16) & 0xFF);
+                payload[3] = (byte)((sampleRate >> 24) & 0xFF);
+                payload[4] = (byte)(channels & 0xFF);
+                payload[5] = (byte)((channels >> 8) & 0xFF);
+                payload[6] = (byte)(frameSamplesPerChPcm & 0xFF);
+                payload[7] = (byte)((frameSamplesPerChPcm >> 8) & 0xFF);
+              }
+              int outIdx = headerLen;
+              for (int i = 0; i < frameSamplesPcm; i++)
+              {
+                float f = _accum[i];
+                short s = (short)Math.Clamp(f * 32767f, short.MinValue, short.MaxValue);
+                payload[outIdx++] = (byte)(s & 0xFF);
+                payload[outIdx++] = (byte)((s >> 8) & 0xFF);
+              }
+              _udp.Send(payload);
             }
-            int outIdx = headerLen;
-            for (int i = 0; i < frameSamplesPcm; i++)
+            else
             {
-              float f = _accum[i];
-              short s = (short)Math.Clamp(f * 32767f, short.MinValue, short.MaxValue);
-              payload[outIdx++] = (byte)(s & 0xFF);
-              payload[outIdx++] = (byte)((s >> 8) & 0xFF);
+              byte[] packet = new byte[headerLen + 12 + frameBytes + 16];
+              unchecked
+              {
+                packet[0] = (byte)(sampleRate & 0xFF);
+                packet[1] = (byte)((sampleRate >> 8) & 0xFF);
+                packet[2] = (byte)((sampleRate >> 16) & 0xFF);
+                packet[3] = (byte)((sampleRate >> 24) & 0xFF);
+                packet[4] = (byte)(channels & 0xFF);
+                packet[5] = (byte)((channels >> 8) & 0xFF);
+                packet[6] = (byte)(frameSamplesPerChPcm & 0xFF);
+                packet[7] = (byte)((frameSamplesPerChPcm >> 8) & 0xFF);
+              }
+              // plaintext
+              byte[] plain = new byte[frameBytes];
+              int pi = 0;
+              for (int i = 0; i < frameSamplesPcm; i++)
+              {
+                short s = (short)Math.Clamp(_accum[i] * 32767f, short.MinValue, short.MaxValue);
+                plain[pi++] = (byte)(s & 0xFF);
+                plain[pi++] = (byte)((s >> 8) & 0xFF);
+              }
+              var nonce = new byte[12];
+              System.Security.Cryptography.RandomNumberGenerator.Fill(nonce);
+              Buffer.BlockCopy(nonce, 0, packet, headerLen, 12);
+              var cipher = new byte[frameBytes];
+              var tag = new byte[16];
+              Crypto.EncryptAesGcm(psk!, nonce, plain, cipher, tag);
+              Buffer.BlockCopy(cipher, 0, packet, headerLen + 12, frameBytes);
+              Buffer.BlockCopy(tag, 0, packet, headerLen + 12 + frameBytes, 16);
+              _udp.Send(packet);
             }
-            _udp.Send(payload);
             // shift remaining samples left
             _accumCount -= frameSamplesPcm;
             if (_accumCount > 0)
             {
-              Array.Copy(_accum, frameSamplesPcm, _accum, 0, _accumCount);
+              Array.Copy(_accum, frameSamplesPerChPcm, _accum, 0, _accumCount);
             }
           }
           return;

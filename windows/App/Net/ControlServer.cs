@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -16,6 +17,7 @@ namespace AudioBridge.Windows.Net
   {
     private IHost? _host;
     private Func<string, int, Task>? _onCommand; // action,value
+    private readonly ConcurrentDictionary<Guid, WebSocket> _clients = new ConcurrentDictionary<Guid, WebSocket>();
 
     public Task StartAsync(int port = 8181, Func<string, int, Task>? onCommand = null)
     {
@@ -42,7 +44,16 @@ namespace AudioBridge.Windows.Net
       if (context.WebSockets.IsWebSocketRequest)
       {
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
-        await EchoLoopAsync(socket);
+        var id = Guid.NewGuid();
+        _clients.TryAdd(id, socket);
+        try
+        {
+          await EchoLoopAsync(socket);
+        }
+        finally
+        {
+          _clients.TryRemove(id, out _);
+        }
         return;
       }
       context.Response.StatusCode = 200;
@@ -61,6 +72,29 @@ namespace AudioBridge.Windows.Net
         {
           using var doc = JsonDocument.Parse(json);
           var root = doc.RootElement;
+          // optional handshake auth
+          if (root.TryGetProperty("type", out var tp0) && tp0.GetString() == "hello")
+          {
+            // { type:"hello", clientId, nonce, timestamp, hmac }
+            if (root.TryGetProperty("clientId", out var cid) && root.TryGetProperty("nonce", out var nn) && root.TryGetProperty("timestamp", out var ts) && root.TryGetProperty("hmac", out var hm))
+            {
+              var settings = AudioBridge.Windows.Config.Settings.Load();
+              var key = settings.GetPskBytes();
+              if (key != null)
+              {
+                var data = (cid.GetString() ?? "") + (nn.GetString() ?? "") + ts.GetInt64().ToString();
+                var mac = new System.Security.Cryptography.HMACSHA256(key);
+                var calc = mac.ComputeHash(Encoding.UTF8.GetBytes(data));
+                string calcB64 = Convert.ToBase64String(calc).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+                if (calcB64 != hm.GetString())
+                {
+                  await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, "auth failed", CancellationToken.None);
+                  return;
+                }
+              }
+            }
+            continue;
+          }
           if (root.TryGetProperty("type", out var tp) && tp.GetString() == "cmd")
           {
             var action = root.TryGetProperty("action", out var a) ? a.GetString() ?? "" : "";
@@ -71,6 +105,20 @@ namespace AudioBridge.Windows.Net
         catch { }
       }
       try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None); } catch { }
+    }
+
+    public async Task BroadcastAsync(object payload, CancellationToken ct = default)
+    {
+      var json = JsonSerializer.Serialize(payload);
+      var msg = new ArraySegment<byte>(Encoding.UTF8.GetBytes(json));
+      foreach (var kv in _clients)
+      {
+        var ws = kv.Value;
+        if (ws.State == WebSocketState.Open)
+        {
+          try { await ws.SendAsync(msg, WebSocketMessageType.Text, true, ct); } catch { }
+        }
+      }
     }
 
     public async void Dispose()
