@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
+using System.Windows.Media.Imaging;
 using QRCoder;
 
 namespace AudioBridge.Windows.Net
@@ -19,6 +21,27 @@ namespace AudioBridge.Windows.Net
       var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "AudioBridge_Pair_QR.png");
       bmp.Save(path, ImageFormat.Png);
       return path;
+    }
+
+    public static BitmapSource GeneratePairQrImageSource(string host, int ctrlPort, int audioPort, string? pskBase64Url)
+    {
+      string device = Environment.MachineName;
+      string key = pskBase64Url ?? "";
+      string content = $"abridge://pair?host={host}&ctrl={ctrlPort}&audio={audioPort}&key={key}&device={device}";
+      using var qrGen = new QRCodeGenerator();
+      using var data = qrGen.CreateQrCode(content, QRCodeGenerator.ECCLevel.Q);
+      using var qr = new QRCode(data);
+      using Bitmap bmp = qr.GetGraphic(12);
+      using var ms = new MemoryStream();
+      bmp.Save(ms, ImageFormat.Png);
+      ms.Position = 0;
+      var bi = new BitmapImage();
+      bi.BeginInit();
+      bi.CacheOption = BitmapCacheOption.OnLoad;
+      bi.StreamSource = ms;
+      bi.EndInit();
+      bi.Freeze();
+      return bi;
     }
   }
 }

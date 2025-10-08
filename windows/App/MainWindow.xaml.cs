@@ -160,8 +160,20 @@ namespace AudioBridge.Windows
         string host = System.Net.Dns.GetHostName();
         int ctrlPort = 8181;
         int audioPort = int.TryParse(TargetPortBox.Text, out var tp) ? tp : 5004;
-        string path = AudioBridge.Windows.Net.QrHelper.GeneratePairQrPng(host, ctrlPort, audioPort, s.PskBase64Url);
-        StatusText.Text = "已生成二维码：" + path;
+        var img = AudioBridge.Windows.Net.QrHelper.GeneratePairQrImageSource(host, ctrlPort, audioPort, s.PskBase64Url);
+        var w = new System.Windows.Window
+        {
+          Title = "配对二维码",
+          Width = 360,
+          Height = 420,
+          Content = new System.Windows.Controls.Border
+          {
+            Padding = new Thickness(12),
+            Child = new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Uniform }
+          }
+        };
+        w.ShowDialog();
+        StatusText.Text = "已显示二维码弹窗";
       }
       catch (Exception ex)
       {
@@ -293,8 +305,20 @@ namespace AudioBridge.Windows
         string host = System.Net.Dns.GetHostName();
         int ctrlPort = 8181;
         int audioPort = int.TryParse(TargetPortBox.Text, out var tp) ? tp : 5004;
-        string path = AudioBridge.Windows.Net.QrHelper.GeneratePairQrPng(host, ctrlPort, audioPort, s.PskBase64Url);
-        StatusText.Text = "状态：推流中，已生成二维码：" + path;
+        var img = AudioBridge.Windows.Net.QrHelper.GeneratePairQrImageSource(host, ctrlPort, audioPort, s.PskBase64Url);
+        var w = new System.Windows.Window
+        {
+          Title = "配对二维码",
+          Width = 360,
+          Height = 420,
+          Content = new System.Windows.Controls.Border
+          {
+            Padding = new Thickness(12),
+            Child = new System.Windows.Controls.Image { Source = img, Stretch = System.Windows.Media.Stretch.Uniform }
+          }
+        };
+        w.Show();
+        StatusText.Text = "状态：推流中，已弹出二维码";
       }
       catch { }
       UpdateTrayTexts();
