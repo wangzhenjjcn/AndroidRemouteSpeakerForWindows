@@ -32,6 +32,7 @@ namespace AudioBridge.Windows
     private WinForms.ToolStripMenuItem? _trayAutostartItem;
     private bool _allowExit = false;
     private AudioBridge.Windows.Net.MdnsPublisher? _mdns;
+    private AudioBridge.Windows.Net.WebAudioStreamer? _webStreamer;
 
     public MainWindow()
     {
@@ -53,6 +54,8 @@ namespace AudioBridge.Windows
       if (m != null) m.IsChecked = s.UseEncryption;
       var ma = this.FindName("MenuAutostart") as System.Windows.Controls.MenuItem;
       if (ma != null) ma.IsChecked = s.Autostart;
+      WebEnabledCheck.IsChecked = s.WebEnabled;
+      WebPortBox.Text = s.WebPort.ToString();
       if (!string.IsNullOrWhiteSpace(s.DeviceId))
       {
         var devices = DeviceCombo.ItemsSource as System.Collections.IEnumerable;
@@ -203,7 +206,43 @@ namespace AudioBridge.Windows
 
     private void Menu_About_Click(object sender, RoutedEventArgs e)
     {
-      System.Windows.MessageBox.Show("AudioBridge LAN\nWindows-Android 局域网音频桥接\n© 2025", "关于");
+      System.Windows.MessageBox.Show("AudioBridge LAN\nWindows-Android 局域网音频桥接\n支持 Android/Web 客户端\n© 2025", "关于");
+    }
+
+    private void WebEnabledCheck_Click(object sender, RoutedEventArgs e)
+    {
+      var s = Settings.Load();
+      s.WebEnabled = WebEnabledCheck.IsChecked == true;
+      s.Save();
+      
+      if (s.WebEnabled && _isStreaming)
+      {
+        _ = StartWebAudioServiceAsync();
+      }
+      else if (!s.WebEnabled)
+      {
+        _ = StopWebAudioServiceAsync();
+      }
+    }
+
+    private void OpenWebButton_Click(object sender, RoutedEventArgs e)
+    {
+      try
+      {
+        int port = int.TryParse(WebPortBox.Text, out var p) ? p : 29763;
+        string url = $"http://localhost:{port}/player.html";
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+          FileName = url,
+          UseShellExecute = true
+        };
+        System.Diagnostics.Process.Start(psi);
+        StatusText.Text = "已在浏览器中打开 Web 播放器";
+      }
+      catch (Exception ex)
+      {
+        StatusText.Text = "打开网页失败：" + ex.Message;
+      }
     }
 
     private void Menu_Autostart_Click(object sender, RoutedEventArgs e)
@@ -298,6 +337,11 @@ namespace AudioBridge.Windows
       StatusText.Text = "状态：推流中  码率=" + _bitrateKbps + " kbps";
       // start control server for basic commands
       _ = EnsureControlServerStarted();
+      // start web audio service if enabled
+      if (WebEnabledCheck.IsChecked == true)
+      {
+        _ = StartWebAudioServiceAsync();
+      }
       // 生成配对二维码
       try
       {
@@ -337,7 +381,79 @@ namespace AudioBridge.Windows
       StartStopButton.Content = "开始推流";
       StatusText.Text = "状态：未推流";
       try { _mdns?.Stop(); } catch { }
+      _ = StopWebAudioServiceAsync();
       UpdateTrayTexts();
+    }
+
+    private async System.Threading.Tasks.Task StartWebAudioServiceAsync()
+    {
+      try
+      {
+        int port = int.TryParse(WebPortBox.Text, out var p) ? p : 29763;
+        
+        if (_webStreamer == null)
+        {
+          _webStreamer = new AudioBridge.Windows.Net.WebAudioStreamer();
+          _webStreamer.StartStreaming();
+        }
+        
+        if (_ctrl != null)
+        {
+          await _ctrl.StartWebAudioAsync(port, _webStreamer);
+          
+          // 保存配置
+          var s = Settings.Load();
+          s.WebPort = port;
+          s.Save();
+          
+          StatusText.Text = $"Web 服务已启动，访问 http://localhost:{port}";
+          OpenWebButton.IsEnabled = true;
+          
+          // 自动复制 wwwroot 中的静态文件(如果不存在)
+          EnsureWebFilesExist();
+        }
+      }
+      catch (Exception ex)
+      {
+        StatusText.Text = "启动 Web 服务失败：" + ex.Message;
+        WebEnabledCheck.IsChecked = false;
+      }
+    }
+
+    private async System.Threading.Tasks.Task StopWebAudioServiceAsync()
+    {
+      try
+      {
+        if (_ctrl != null)
+        {
+          await _ctrl.StopWebAudioAsync();
+        }
+        _webStreamer?.StopStreaming();
+        _webStreamer = null;
+        OpenWebButton.IsEnabled = false;
+        StatusText.Text = "Web 服务已停止";
+      }
+      catch (Exception ex)
+      {
+        StatusText.Text = "停止 Web 服务失败：" + ex.Message;
+      }
+    }
+
+    private void EnsureWebFilesExist()
+    {
+      try
+      {
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        var wwwroot = System.IO.Path.Combine(baseDir, "wwwroot");
+        
+        // 检查是否存在 player.html
+        var playerHtml = System.IO.Path.Combine(wwwroot, "player.html");
+        if (!System.IO.File.Exists(playerHtml))
+        {
+          System.Diagnostics.Debug.WriteLine("[MainWindow] Warning: wwwroot/player.html not found");
+        }
+      }
+      catch { }
     }
 
     private static AudioBridge.Windows.Net.ControlServer? _ctrl;
@@ -448,6 +564,12 @@ namespace AudioBridge.Windows
                 payload[outIdx++] = (byte)((s >> 8) & 0xFF);
               }
               _udp.Send(payload);
+              
+              // 同时发送到 Web 客户端
+              if (_webStreamer != null && _webStreamer.IsStreaming)
+              {
+                _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(payload.ToArray()));
+              }
             }
             else
             {
@@ -481,6 +603,25 @@ namespace AudioBridge.Windows
               Buffer.BlockCopy(cipher, 0, packet, headerLen + 12, frameBytes);
               Buffer.BlockCopy(tag, 0, packet, headerLen + 12 + frameBytes, 16);
               _udp.Send(packet);
+              
+              // Web 客户端使用未加密的版本 (在 HTTPS 下传输已安全)
+              if (_webStreamer != null && _webStreamer.IsStreaming)
+              {
+                Span<byte> webPayload = stackalloc byte[headerLen + frameBytes];
+                unchecked
+                {
+                  webPayload[0] = (byte)(sampleRate & 0xFF);
+                  webPayload[1] = (byte)((sampleRate >> 8) & 0xFF);
+                  webPayload[2] = (byte)((sampleRate >> 16) & 0xFF);
+                  webPayload[3] = (byte)((sampleRate >> 24) & 0xFF);
+                  webPayload[4] = (byte)(channels & 0xFF);
+                  webPayload[5] = (byte)((channels >> 8) & 0xFF);
+                  webPayload[6] = (byte)(frameSamplesPerChPcm & 0xFF);
+                  webPayload[7] = (byte)((frameSamplesPerChPcm >> 8) & 0xFF);
+                }
+                plain.CopyTo(webPayload.Slice(headerLen));
+                _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+              }
             }
             // shift remaining samples left
             _accumCount -= frameSamplesPcm;

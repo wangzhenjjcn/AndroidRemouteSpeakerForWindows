@@ -15,6 +15,10 @@ namespace AudioBridge.Windows.Config
     public bool Autostart { get; set; } = false;
     public string? DeviceId { get; set; }
     public string? PskBase64Url { get; set; }
+    
+    // Web 服务配置
+    public bool WebEnabled { get; set; } = false;
+    public int WebPort { get; set; } = 29763;
     private static string GetFolder()
     {
       var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);

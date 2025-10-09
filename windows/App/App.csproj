@@ -19,6 +19,12 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 复制 wwwroot 文件到输出目录 -->
+    <Content Include="wwwroot\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <!-- Config\Settings.cs will be included implicitly by SDK -->
 </Project>
 

@@ -10,14 +10,17 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.FileProviders;
 
 namespace AudioBridge.Windows.Net
 {
   public sealed class ControlServer : IDisposable
   {
     private IHost? _host;
+    private IHost? _webHost;
     private Func<string, int, Task>? _onCommand; // action,value
     private readonly ConcurrentDictionary<Guid, WebSocket> _clients = new ConcurrentDictionary<Guid, WebSocket>();
+    private WebAudioStreamer? _webAudioStreamer;
 
     public Task StartAsync(int port = 8181, Func<string, int, Task>? onCommand = null)
     {
@@ -153,6 +156,100 @@ namespace AudioBridge.Windows.Net
       }
     }
 
+    /// <summary>
+    /// 启动 Web 音频服务
+    /// </summary>
+    public Task StartWebAudioAsync(int port, WebAudioStreamer streamer)
+    {
+      _webAudioStreamer = streamer;
+      
+      _webHost = Host.CreateDefaultBuilder()
+        .ConfigureWebHostDefaults(webBuilder =>
+        {
+          webBuilder.UseKestrel(options =>
+          {
+            options.Listen(IPAddress.Any, port);
+          });
+          webBuilder.Configure(app =>
+          {
+            app.UseWebSockets();
+            
+            // 静态文件服务
+            var webRoot = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wwwroot");
+            if (!System.IO.Directory.Exists(webRoot))
+            {
+              System.IO.Directory.CreateDirectory(webRoot);
+            }
+            
+            app.UseStaticFiles(new StaticFileOptions
+            {
+              FileProvider = new PhysicalFileProvider(webRoot),
+              RequestPath = ""
+            });
+            
+            app.Run(HandleWebRequestAsync);
+          });
+        })
+        .Build();
+        
+      return _webHost.StartAsync();
+    }
+
+    /// <summary>
+    /// 处理 Web 请求
+    /// </summary>
+    private async Task HandleWebRequestAsync(HttpContext context)
+    {
+      var path = context.Request.Path.Value ?? "/";
+      
+      // WebSocket 音频流端点
+      if (path.Equals("/audio", StringComparison.OrdinalIgnoreCase) && context.WebSockets.IsWebSocketRequest)
+      {
+        var socket = await context.WebSockets.AcceptWebSocketAsync();
+        if (_webAudioStreamer != null)
+        {
+          await _webAudioStreamer.AddClientAsync(socket);
+        }
+        return;
+      }
+      
+      // 默认首页
+      if (path == "/" || path == "/index.html")
+      {
+        context.Response.Redirect("/player.html");
+        return;
+      }
+      
+      context.Response.StatusCode = 404;
+      await context.Response.WriteAsync("Not Found");
+    }
+
+    /// <summary>
+    /// 停止 Web 音频服务
+    /// </summary>
+    public async Task StopWebAudioAsync()
+    {
+      if (_webHost != null)
+      {
+        try { await _webHost.StopAsync(); } catch { }
+        _webHost.Dispose();
+        _webHost = null;
+      }
+      _webAudioStreamer = null;
+    }
+
+    /// <summary>
+    /// 广播音频数据到 Web 客户端
+    /// </summary>
+    public Task BroadcastWebAudioAsync(ReadOnlyMemory<byte> audioData, CancellationToken ct = default)
+    {
+      if (_webAudioStreamer != null && _webAudioStreamer.IsStreaming)
+      {
+        return _webAudioStreamer.BroadcastAudioAsync(audioData, ct);
+      }
+      return Task.CompletedTask;
+    }
+
     public async void Dispose()
     {
       if (_host != null)
@@ -161,6 +258,15 @@ namespace AudioBridge.Windows.Net
         _host.Dispose();
         _host = null;
       }
+      
+      if (_webHost != null)
+      {
+        try { await _webHost.StopAsync(); } catch { }
+        _webHost.Dispose();
+        _webHost = null;
+      }
+      
+      _webAudioStreamer?.Dispose();
     }
   }
 }
