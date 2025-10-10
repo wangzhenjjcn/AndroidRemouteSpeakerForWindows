@@ -44,8 +44,8 @@ namespace AudioBridge.Windows.Net
         Interlocked.Increment(ref _clientCount);
         System.Diagnostics.Debug.WriteLine($"[WebAudioStreamer] Client {client.Id} connected. Total: {_clientCount}");
 
-        // 启动接收循环（处理客户端断开）
-        _ = Task.Run(async () => await ClientReceiveLoopAsync(client));
+        // 等待接收循环完成（保持连接打开）
+        await ClientReceiveLoopAsync(client);
       }
     }
 

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AudioBridge Web Player</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      backdrop-filter: blur(10px);
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+      margin-bottom: 10px;
+      font-size: 32px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+
+    .status-card {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 15px;
+      padding: 25px;
+      margin-bottom: 30px;
+      color: white;
+      box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .status-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .status-label {
+      font-size: 14px;
+      opacity: 0.9;
+      font-weight: 500;
+    }
+
+    .status-value {
+      font-size: 16px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-indicator.disconnected {
+      background-color: #ff6b6b;
+    }
+
+    .status-indicator.connecting {
+      background-color: #ffd93d;
+    }
+
+    .status-indicator.connected {
+      background-color: #6bcf7f;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .controls {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+
+    button {
+      flex: 1;
+      padding: 15px 30px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-connect {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-disconnect {
+      background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+      color: white;
+    }
+
+    .volume-control {
+      margin-bottom: 30px;
+    }
+
+    .volume-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      color: #333;
+      font-weight: 600;
+    }
+
+    .volume-value {
+      color: #667eea;
+      font-size: 18px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 8px;
+      border-radius: 5px;
+      background: #e0e0e0;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(102, 126, 234, 0.5);
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 2px 10px rgba(102, 126, 234, 0.5);
+    }
+
+    .stats {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+
+    .stat-item {
+      text-align: center;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #333;
+    }
+
+    .info-box {
+      margin-top: 20px;
+      padding: 15px;
+      background: #e3f2fd;
+      border-radius: 10px;
+      border-left: 4px solid #2196f3;
+    }
+
+    .info-box p {
+      color: #1976d2;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .error-message {
+      background: #ffebee;
+      border-left-color: #f44336;
+      display: none;
+    }
+
+    .error-message p {
+      color: #c62828;
+    }
+
+    @media (max-width: 600px) {
+      .container {
+        padding: 25px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+      .controls {
+        flex-direction: column;
+      }
+
+      .stats {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎵 AudioBridge</h1>
+    <p class="subtitle">Web 实时音频播放器</p>
+
+    <div class="status-card">
+      <div class="status-row">
+        <span class="status-label">连接状态</span>
+        <span class="status-value">
+          <span class="status-indicator disconnected" id="statusIndicator"></span>
+          <span id="statusText">未连接</span>
+        </span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">服务器地址</span>
+        <span class="status-value" id="serverUrl">-</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">音频格式</span>
+        <span class="status-value" id="audioFormat">-</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn-connect" id="connectBtn" onclick="connect()">连接</button>
+      <button class="btn-disconnect" id="disconnectBtn" onclick="disconnect()" disabled>断开</button>
+    </div>
+
+    <div class="volume-control">
+      <div class="volume-label">
+        <span>🔊 音量</span>
+        <span class="volume-value" id="volumeValue">100%</span>
+      </div>
+      <input type="range" id="volumeSlider" min="0" max="100" value="100" oninput="updateVolume(this.value)">
+    </div>
+
+    <div class="stats">
+      <div class="stat-item">
+        <div class="stat-label">已接收</div>
+        <div class="stat-value" id="receivedPackets">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">数据量</div>
+        <div class="stat-value" id="receivedBytes">0 KB</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">延迟</div>
+        <div class="stat-value" id="latency">- ms</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">缓冲</div>
+        <div class="stat-value" id="bufferSize">0</div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <p>💡 点击"连接"按钮开始播放实时音频流。确保 Windows 端已开启推流服务。</p>
+    </div>
+
+    <div class="info-box error-message" id="errorBox">
+      <p id="errorText"></p>
+    </div>
+  </div>
+
+  <script src="audio-player.js"></script>
+</body>
+</html>
+

@@ -159,9 +159,11 @@ namespace AudioBridge.Windows.Net
     /// <summary>
     /// 启动 Web 音频服务
     /// </summary>
-    public Task StartWebAudioAsync(int port, WebAudioStreamer streamer)
+    public async Task StartWebAudioAsync(int port, WebAudioStreamer streamer)
     {
       _webAudioStreamer = streamer;
+      
+      System.Diagnostics.Debug.WriteLine($"[ControlServer] Starting Web Audio service on port {port}");
       
       _webHost = Host.CreateDefaultBuilder()
         .ConfigureWebHostDefaults(webBuilder =>
@@ -169,10 +171,45 @@ namespace AudioBridge.Windows.Net
           webBuilder.UseKestrel(options =>
           {
             options.Listen(IPAddress.Any, port);
+            System.Diagnostics.Debug.WriteLine($"[ControlServer] Kestrel listening on 0.0.0.0:{port}");
           });
           webBuilder.Configure(app =>
           {
+            // 启用 WebSocket 支持
             app.UseWebSockets();
+            System.Diagnostics.Debug.WriteLine("[ControlServer] WebSocket middleware enabled");
+            
+            // WebSocket 音频流端点 (必须在静态文件之前)
+            app.Use(async (context, next) =>
+            {
+              System.Diagnostics.Debug.WriteLine($"[ControlServer] Request: {context.Request.Method} {context.Request.Path}");
+              
+              if (context.Request.Path.Equals("/audio", StringComparison.OrdinalIgnoreCase))
+              {
+                if (context.WebSockets.IsWebSocketRequest)
+                {
+                  System.Diagnostics.Debug.WriteLine("[ControlServer] Accepting WebSocket connection to /audio");
+                  var socket = await context.WebSockets.AcceptWebSocketAsync();
+                  System.Diagnostics.Debug.WriteLine("[ControlServer] WebSocket connected");
+                  if (_webAudioStreamer != null)
+                  {
+                    await _webAudioStreamer.AddClientAsync(socket);
+                  }
+                  else
+                  {
+                    System.Diagnostics.Debug.WriteLine("[ControlServer] WARNING: _webAudioStreamer is null!");
+                  }
+                  return;
+                }
+                else
+                {
+                  System.Diagnostics.Debug.WriteLine("[ControlServer] Non-WebSocket request to /audio - returning 400");
+                  context.Response.StatusCode = 400; // Bad Request
+                  return;
+                }
+              }
+              await next();
+            });
             
             // 静态文件服务
             var webRoot = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wwwroot");
@@ -187,42 +224,35 @@ namespace AudioBridge.Windows.Net
               RequestPath = ""
             });
             
-            app.Run(HandleWebRequestAsync);
+            // 默认路由
+            app.Run(async context =>
+            {
+              if (context.Request.Path == "/" || context.Request.Path == "/index.html")
+              {
+                context.Response.Redirect("/player.html");
+                return;
+              }
+              
+              context.Response.StatusCode = 404;
+              await context.Response.WriteAsync("Not Found");
+            });
           });
         })
         .Build();
-        
-      return _webHost.StartAsync();
+      
+      try
+      {
+        await _webHost.StartAsync();
+        System.Diagnostics.Debug.WriteLine($"[ControlServer] Web Audio service started successfully on port {port}");
+      }
+      catch (Exception ex)
+      {
+        System.Diagnostics.Debug.WriteLine($"[ControlServer] ERROR starting Web Audio service: {ex.Message}");
+        System.Diagnostics.Debug.WriteLine($"[ControlServer] Stack trace: {ex.StackTrace}");
+        throw;
+      }
     }
 
-    /// <summary>
-    /// 处理 Web 请求
-    /// </summary>
-    private async Task HandleWebRequestAsync(HttpContext context)
-    {
-      var path = context.Request.Path.Value ?? "/";
-      
-      // WebSocket 音频流端点
-      if (path.Equals("/audio", StringComparison.OrdinalIgnoreCase) && context.WebSockets.IsWebSocketRequest)
-      {
-        var socket = await context.WebSockets.AcceptWebSocketAsync();
-        if (_webAudioStreamer != null)
-        {
-          await _webAudioStreamer.AddClientAsync(socket);
-        }
-        return;
-      }
-      
-      // 默认首页
-      if (path == "/" || path == "/index.html")
-      {
-        context.Response.Redirect("/player.html");
-        return;
-      }
-      
-      context.Response.StatusCode = 404;
-      await context.Response.WriteAsync("Not Found");
-    }
 
     /// <summary>
     /// 停止 Web 音频服务

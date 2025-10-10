@@ -215,11 +215,12 @@ namespace AudioBridge.Windows
       s.WebEnabled = WebEnabledCheck.IsChecked == true;
       s.Save();
       
-      if (s.WebEnabled && _isStreaming)
+      if (s.WebEnabled)
       {
+        // 立即启动 Web 服务(不需要等待推流)
         _ = StartWebAudioServiceAsync();
       }
-      else if (!s.WebEnabled)
+      else
       {
         _ = StopWebAudioServiceAsync();
       }
@@ -385,10 +386,15 @@ namespace AudioBridge.Windows
       UpdateTrayTexts();
     }
 
+    private bool _webServiceStarted = false;
+    
     private async System.Threading.Tasks.Task StartWebAudioServiceAsync()
     {
       try
       {
+        // 避免重复启动
+        if (_webServiceStarted) return;
+        
         int port = int.TryParse(WebPortBox.Text, out var p) ? p : 29763;
         
         if (_webStreamer == null)
@@ -396,6 +402,9 @@ namespace AudioBridge.Windows
           _webStreamer = new AudioBridge.Windows.Net.WebAudioStreamer();
           _webStreamer.StartStreaming();
         }
+        
+        // 确保控制服务器已启动(Web 服务依赖它)
+        await EnsureControlServerStarted();
         
         if (_ctrl != null)
         {
@@ -406,6 +415,7 @@ namespace AudioBridge.Windows
           s.WebPort = port;
           s.Save();
           
+          _webServiceStarted = true;
           StatusText.Text = $"Web 服务已启动，访问 http://localhost:{port}";
           OpenWebButton.IsEnabled = true;
           
@@ -430,6 +440,7 @@ namespace AudioBridge.Windows
         }
         _webStreamer?.StopStreaming();
         _webStreamer = null;
+        _webServiceStarted = false;
         OpenWebButton.IsEnabled = false;
         StatusText.Text = "Web 服务已停止";
       }
@@ -664,6 +675,32 @@ namespace AudioBridge.Windows
             packet[11] = 0; // rsv
             opusBuf.Slice(0, len).CopyTo(packet.Slice(12));
             _udp.Send(packet);
+            
+            // 同时发送 PCM 到 Web 客户端 (Web 端使用 PCM 格式)
+            if (_webStreamer != null && _webStreamer.IsStreaming)
+            {
+              int headerLen = 8;
+              Span<byte> webPayload = stackalloc byte[headerLen + pcm16.Length * 2];
+              unchecked
+              {
+                webPayload[0] = (byte)(48000 & 0xFF);
+                webPayload[1] = (byte)((48000 >> 8) & 0xFF);
+                webPayload[2] = (byte)((48000 >> 16) & 0xFF);
+                webPayload[3] = (byte)((48000 >> 24) & 0xFF);
+                webPayload[4] = (byte)(2 & 0xFF);
+                webPayload[5] = (byte)((2 >> 8) & 0xFF);
+                webPayload[6] = (byte)(frameSamplesPerCh & 0xFF);
+                webPayload[7] = (byte)((frameSamplesPerCh >> 8) & 0xFF);
+              }
+              // 复制 PCM16 数据
+              for (int i = 0; i < pcm16.Length; i++)
+              {
+                short s = pcm16[i];
+                webPayload[headerLen + i * 2] = (byte)(s & 0xFF);
+                webPayload[headerLen + i * 2 + 1] = (byte)((s >> 8) & 0xFF);
+              }
+              _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+            }
           }
           else
           {
@@ -689,6 +726,32 @@ namespace AudioBridge.Windows
             Buffer.BlockCopy(cipher, 0, packet, 24, len);
             Buffer.BlockCopy(tag, 0, packet, 24 + len, 16);
             _udp.Send(packet);
+            
+            // 同时发送 PCM 到 Web 客户端 (Web 端使用 PCM 格式,不加密)
+            if (_webStreamer != null && _webStreamer.IsStreaming)
+            {
+              int headerLen = 8;
+              Span<byte> webPayload = stackalloc byte[headerLen + pcm16.Length * 2];
+              unchecked
+              {
+                webPayload[0] = (byte)(48000 & 0xFF);
+                webPayload[1] = (byte)((48000 >> 8) & 0xFF);
+                webPayload[2] = (byte)((48000 >> 16) & 0xFF);
+                webPayload[3] = (byte)((48000 >> 24) & 0xFF);
+                webPayload[4] = (byte)(2 & 0xFF);
+                webPayload[5] = (byte)((2 >> 8) & 0xFF);
+                webPayload[6] = (byte)(frameSamplesPerCh & 0xFF);
+                webPayload[7] = (byte)((frameSamplesPerCh >> 8) & 0xFF);
+              }
+              // 复制 PCM16 数据
+              for (int i = 0; i < pcm16.Length; i++)
+              {
+                short s = pcm16[i];
+                webPayload[headerLen + i * 2] = (byte)(s & 0xFF);
+                webPayload[headerLen + i * 2 + 1] = (byte)((s >> 8) & 0xFF);
+              }
+              _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+            }
           }
           _seq++;
           _ts48k += (uint)frameSamplesPerCh;
