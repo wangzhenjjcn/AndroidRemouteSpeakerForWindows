@@ -50,7 +50,7 @@ namespace AudioBridge.Windows.Net
     }
 
     /// <summary>
-    /// 客户端接收循环，用于检测断开连接
+    /// 客户端接收循环，用于检测断开连接和处理心跳
     /// </summary>
     private async Task ClientReceiveLoopAsync(WebSocketClient client)
     {
@@ -73,7 +73,30 @@ namespace AudioBridge.Windows.Net
             );
             break;
           }
+          else if (result.MessageType == WebSocketMessageType.Text)
+          {
+            // 处理文本消息（ping/pong）
+            var message = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+            System.Diagnostics.Debug.WriteLine($"[WebAudioStreamer] Received text message from {client.Id}: {message}");
+            
+            if (message.Contains("\"type\":\"ping\""))
+            {
+              // 回复 pong
+              var pong = System.Text.Encoding.UTF8.GetBytes("{\"type\":\"pong\"}");
+              await client.Socket.SendAsync(
+                new ArraySegment<byte>(pong),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None
+              );
+              System.Diagnostics.Debug.WriteLine($"[WebAudioStreamer] Sent pong to {client.Id}");
+            }
+          }
         }
+      }
+      catch (System.OperationCanceledException)
+      {
+        System.Diagnostics.Debug.WriteLine($"[WebAudioStreamer] Client {client.Id} operation cancelled");
       }
       catch (Exception ex)
       {

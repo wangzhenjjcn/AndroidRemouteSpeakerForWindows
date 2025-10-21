@@ -27,6 +27,8 @@ namespace AudioBridge.Windows
     private int _accumCount = 0;
     private int _lastSampleRate = 0;
     private int _lastChannels = 0;
+    private Audio.AudioResampler? _resampler;
+    private const int TARGET_SAMPLE_RATE = 44100; // 改用 44.1kHz，兼容性更好
     private WinForms.NotifyIcon? _tray;
     private WinForms.ToolStripMenuItem? _trayStartStopItem;
     private WinForms.ToolStripMenuItem? _trayAutostartItem;
@@ -522,6 +524,16 @@ namespace AudioBridge.Windows
         if (format == null) return;
         int sampleRate = format.SampleRate;
         int channels = format.Channels;
+        
+        // 在状态栏显示当前采样率（便于调试）
+        this.Dispatcher.Invoke(() =>
+        {
+          if (StatusText.Text.Contains("推流中") && !StatusText.Text.Contains("Hz"))
+          {
+            StatusText.Text += $" ({sampleRate}Hz {channels}ch)";
+          }
+        });
+        
         // reset accumulator when format changes
         if (sampleRate != _lastSampleRate || channels != _lastChannels)
         {
@@ -529,6 +541,18 @@ namespace AudioBridge.Windows
           _accumCount = 0;
           _lastSampleRate = sampleRate;
           _lastChannels = channels;
+          
+          // 创建重采样器（用于 Web 客户端）
+          if (sampleRate != TARGET_SAMPLE_RATE)
+          {
+            _resampler = new Audio.AudioResampler(sampleRate, TARGET_SAMPLE_RATE, channels);
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] Created resampler: {sampleRate}Hz -> {TARGET_SAMPLE_RATE}Hz");
+          }
+          else
+          {
+            _resampler = null;
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] No resampling needed: {sampleRate}Hz");
+          }
         }
         // append incoming samples into accumulator
         if (_accum.Length < _accumCount + pcm.Length)
@@ -576,10 +600,10 @@ namespace AudioBridge.Windows
               }
               _udp.Send(payload);
               
-              // 同时发送到 Web 客户端
+              // 同时发送到 Web 客户端（使用 44.1kHz）
               if (_webStreamer != null && _webStreamer.IsStreaming)
               {
-                _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(payload.ToArray()));
+                SendToWebClients(frameSamplesPcm);
               }
             }
             else
@@ -615,23 +639,10 @@ namespace AudioBridge.Windows
               Buffer.BlockCopy(tag, 0, packet, headerLen + 12 + frameBytes, 16);
               _udp.Send(packet);
               
-              // Web 客户端使用未加密的版本 (在 HTTPS 下传输已安全)
+              // Web 客户端使用未加密的版本并重采样到 44.1kHz
               if (_webStreamer != null && _webStreamer.IsStreaming)
               {
-                Span<byte> webPayload = stackalloc byte[headerLen + frameBytes];
-                unchecked
-                {
-                  webPayload[0] = (byte)(sampleRate & 0xFF);
-                  webPayload[1] = (byte)((sampleRate >> 8) & 0xFF);
-                  webPayload[2] = (byte)((sampleRate >> 16) & 0xFF);
-                  webPayload[3] = (byte)((sampleRate >> 24) & 0xFF);
-                  webPayload[4] = (byte)(channels & 0xFF);
-                  webPayload[5] = (byte)((channels >> 8) & 0xFF);
-                  webPayload[6] = (byte)(frameSamplesPerChPcm & 0xFF);
-                  webPayload[7] = (byte)((frameSamplesPerChPcm >> 8) & 0xFF);
-                }
-                plain.CopyTo(webPayload.Slice(headerLen));
-                _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+                SendToWebClients(frameSamplesPcm);
               }
             }
             // shift remaining samples left
@@ -767,6 +778,74 @@ namespace AudioBridge.Windows
       catch
       {
         // swallow send errors in prototype
+      }
+    }
+
+    private void SendToWebClients(int frameSampleCount)
+    {
+      try
+      {
+        if (_webStreamer == null || !_webStreamer.IsStreaming) return;
+        
+        int channels = _lastChannels;
+        int sourceSampleRate = _lastSampleRate;
+        
+        // 准备重采样（如果需要）
+        float[] audioData;
+        int outputSampleCount;
+        int outputFrameCount;
+        
+        if (_resampler != null)
+        {
+          // 需要重采样
+          outputSampleCount = _resampler.GetOutputSampleCount(frameSampleCount);
+          audioData = new float[outputSampleCount];
+          outputSampleCount = _resampler.Resample(
+            new ReadOnlySpan<float>(_accum, 0, frameSampleCount),
+            new Span<float>(audioData)
+          );
+          outputFrameCount = outputSampleCount / channels;
+        }
+        else
+        {
+          // 无需重采样，直接使用
+          outputSampleCount = frameSampleCount;
+          outputFrameCount = outputSampleCount / channels;
+          audioData = new float[outputSampleCount];
+          Array.Copy(_accum, audioData, outputSampleCount);
+        }
+        
+        // 转换为 PCM16 并封包
+        int headerLen = 8;
+        byte[] webPayload = new byte[headerLen + outputSampleCount * 2];
+        
+        // 写入头信息
+        unchecked
+        {
+          webPayload[0] = (byte)(TARGET_SAMPLE_RATE & 0xFF);
+          webPayload[1] = (byte)((TARGET_SAMPLE_RATE >> 8) & 0xFF);
+          webPayload[2] = (byte)((TARGET_SAMPLE_RATE >> 16) & 0xFF);
+          webPayload[3] = (byte)((TARGET_SAMPLE_RATE >> 24) & 0xFF);
+          webPayload[4] = (byte)(channels & 0xFF);
+          webPayload[5] = (byte)((channels >> 8) & 0xFF);
+          webPayload[6] = (byte)(outputFrameCount & 0xFF);
+          webPayload[7] = (byte)((outputFrameCount >> 8) & 0xFF);
+        }
+        
+        // 转换为 PCM16
+        int outIdx = headerLen;
+        for (int i = 0; i < outputSampleCount; i++)
+        {
+          short s = (short)Math.Clamp(audioData[i] * 32767f, short.MinValue, short.MaxValue);
+          webPayload[outIdx++] = (byte)(s & 0xFF);
+          webPayload[outIdx++] = (byte)((s >> 8) & 0xFF);
+        }
+        
+        _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload));
+      }
+      catch (Exception ex)
+      {
+        System.Diagnostics.Debug.WriteLine($"[MainWindow] SendToWebClients error: {ex.Message}");
       }
     }
 
