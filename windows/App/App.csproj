@@ -23,6 +23,7 @@
     <!-- 复制 wwwroot 文件到输出目录 -->
     <Content Include="wwwroot\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
   <!-- Config\Settings.cs will be included implicitly by SDK -->

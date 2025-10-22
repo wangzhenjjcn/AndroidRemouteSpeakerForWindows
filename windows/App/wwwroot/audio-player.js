@@ -8,6 +8,9 @@ class AudioPlayer {
     this.ws = null;
     this.audioContext = null;
     this.gainNode = null;
+    this.preGainNode = null;      // 前级衰减（输入预留余量）
+    this.compressorNode = null;   // 动态压缩（软限幅）
+    this.highpassNode = null;     // 直流阻断高通滤波
     this.isConnected = false;
     this.receivedPackets = 0;
     this.receivedBytes = 0;
@@ -17,10 +20,14 @@ class AudioPlayer {
     this.audioQueue = [];
     this.isPlaying = false;
     this.nextPlayTime = 0;
-    this.minBufferSize = 3;      // 最少3个包才开始播放
-    this.targetBufferSize = 6;   // 目标缓冲6个包
-    this.maxBufferSize = 15;     // 最多缓冲15个包
-    this.initialBufferDuration = 0.15; // 150ms 初始缓冲
+    this.minBufferSize = 4;      // 提高起播门槛，减少欠载
+    this.targetBufferSize = 8;   // 目标缓冲
+    this.maxBufferSize = 20;     // 上限
+    this.initialBufferDuration = 0.20; // 200ms 初始缓冲
+
+    // 预增益与淡入淡出
+    this.inputAttenuation = 0.84; // ≈ -1.5 dB，预留余量减少削波
+    this.fadeMs = 2.0;            // 每个缓冲淡入/淡出时长
     
     // 性能监控
     this.lastPacketTime = 0;
@@ -72,9 +79,36 @@ class AudioPlayer {
       // 初始化 Web Audio API
       if (!this.audioContext) {
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // 输出音量
         this.gainNode = this.audioContext.createGain();
-        this.gainNode.connect(this.audioContext.destination);
         this.gainNode.gain.value = 1.0;
+
+        // 前级衰减（为后端峰值/跨样本峰值预留余量）
+        this.preGainNode = this.audioContext.createGain();
+        this.preGainNode.gain.value = this.inputAttenuation;
+
+        // 动态压缩器（软限幅）
+        this.compressorNode = this.audioContext.createDynamicsCompressor();
+        try {
+          this.compressorNode.threshold.setValueAtTime(-9, this.audioContext.currentTime); // dB
+          this.compressorNode.knee.setValueAtTime(12, this.audioContext.currentTime);
+          this.compressorNode.ratio.setValueAtTime(4, this.audioContext.currentTime);
+          this.compressorNode.attack.setValueAtTime(0.003, this.audioContext.currentTime);
+          this.compressorNode.release.setValueAtTime(0.25, this.audioContext.currentTime);
+        } catch {}
+
+        // 直流阻断（高通 20Hz @ Q≈0.707）
+        this.highpassNode = this.audioContext.createBiquadFilter();
+        this.highpassNode.type = 'highpass';
+        try {
+          this.highpassNode.frequency.setValueAtTime(20, this.audioContext.currentTime);
+          this.highpassNode.Q.setValueAtTime(0.707, this.audioContext.currentTime);
+        } catch {}
+
+        // 连接图：source -> perBufferGain -> preGain -> compressor -> highpass -> gain -> destination
+        this.compressorNode.connect(this.highpassNode);
+        this.highpassNode.connect(this.gainNode);
+        this.gainNode.connect(this.audioContext.destination);
       }
       
       // 恢复 AudioContext (浏览器要求用户交互后才能播放)
@@ -289,7 +323,10 @@ class AudioPlayer {
         for (let i = 0; i < samplesPerCh; i++) {
           const pcmIndex = i * channels + ch;
           if (pcmIndex < pcmData.length) {
-            channelData[i] = pcmData[pcmIndex] / 32768.0; // Int16 -> Float32
+            // Int16 -> Float32 对称映射：-32768 -> -1.0，其余除以 32767
+            const v = pcmData[pcmIndex];
+            const f = (v === -32768) ? -1.0 : (v / 32767.0);
+            channelData[i] = f * this.inputAttenuation;
           }
         }
       }
@@ -333,7 +370,20 @@ class AudioPlayer {
       // 创建音频源节点
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this.gainNode);
+
+      // 为单个缓冲创建包络增益，做短淡入/淡出降低拼接爆音
+      const srcGain = this.audioContext.createGain();
+      try { srcGain.gain.setValueAtTime(1.0, this.audioContext.currentTime); } catch {}
+
+      source.connect(srcGain);
+      // 完整链路：perBufferGain -> preGain -> compressor -> highpass -> gain -> destination
+      if (this.preGainNode && this.compressorNode) {
+        srcGain.connect(this.preGainNode);
+        this.preGainNode.connect(this.compressorNode);
+      } else {
+        // 兜底：直接连到输出增益
+        srcGain.connect(this.gainNode);
+      }
       
       // 调度播放
       const currentTime = this.audioContext.currentTime;
@@ -347,6 +397,18 @@ class AudioPlayer {
         this.nextPlayTime = currentTime + 0.05; // 重置为50ms延迟
       }
       
+      // 安排淡入/淡出包络
+      const fade = Math.min(this.fadeMs / 1000, Math.max(0.001, audioBuffer.duration / 4));
+      const t0 = playTime;
+      const t1 = playTime + audioBuffer.duration;
+      try {
+        // 避免到 0 的指数斜坡，使用很小的底值
+        srcGain.gain.setValueAtTime(0.0001, t0);
+        srcGain.gain.exponentialRampToValueAtTime(1.0, t0 + fade);
+        srcGain.gain.setValueAtTime(1.0, Math.max(t0, t1 - fade));
+        srcGain.gain.exponentialRampToValueAtTime(0.0001, t1);
+      } catch {}
+
       source.start(playTime);
       
       // 更新下次播放时间

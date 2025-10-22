@@ -208,3 +208,4 @@ __marimo__/
 /android/.android-sdk
 
 /windows/App/obj/Release/net8.0-windows
+/windows/App/bin/Release

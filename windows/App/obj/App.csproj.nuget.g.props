@@ -12,7 +12,11 @@
   <ItemGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
     <SourceRoot Include="C:\Users\WangZhen\.nuget\packages\" />
   </ItemGroup>
+  <ImportGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <Import Project="$(NuGetPackageRoot)microsoft.net.illink.tasks\8.0.20\build\Microsoft.NET.ILLink.Tasks.props" Condition="Exists('$(NuGetPackageRoot)microsoft.net.illink.tasks\8.0.20\build\Microsoft.NET.ILLink.Tasks.props')" />
+  </ImportGroup>
   <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
     <PkgMono_Zeroconf Condition=" '$(PkgMono_Zeroconf)' == '' ">C:\Users\WangZhen\.nuget\packages\mono.zeroconf\0.9.0</PkgMono_Zeroconf>
+    <PkgMicrosoft_NET_ILLink_Tasks Condition=" '$(PkgMicrosoft_NET_ILLink_Tasks)' == '' ">C:\Users\WangZhen\.nuget\packages\microsoft.net.illink.tasks\8.0.20</PkgMicrosoft_NET_ILLink_Tasks>
   </PropertyGroup>
 </Project>

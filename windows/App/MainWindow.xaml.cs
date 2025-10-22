@@ -29,6 +29,7 @@ namespace AudioBridge.Windows
     private int _lastChannels = 0;
     private Audio.AudioResampler? _resampler;
     private const int TARGET_SAMPLE_RATE = 44100; // 改用 44.1kHz，兼容性更好
+    private const float WEB_PRE_ATTENUATION = 0.84f; // 约 -1.5 dB：Web PCM 量化预衰减，减少削波
     private WinForms.NotifyIcon? _tray;
     private WinForms.ToolStripMenuItem? _trayStartStopItem;
     private WinForms.ToolStripMenuItem? _trayAutostartItem;
@@ -73,7 +74,9 @@ namespace AudioBridge.Windows
       this.StateChanged += (_, __) => UpdateTrayTexts();
       this.Closing += (o, args) =>
       {
-        if (!_allowExit)
+        if (_allowExit) return;
+        bool shouldMinimizeToTray = _isStreaming || _webServiceStarted;
+        if (shouldMinimizeToTray)
         {
           args.Cancel = true;
           this.Hide();
@@ -82,6 +85,7 @@ namespace AudioBridge.Windows
             try { _tray.BalloonTipTitle = "AudioBridge"; _tray.BalloonTipText = "程序已最小化到托盘"; _tray.ShowBalloonTip(1000); } catch { }
           }
         }
+        // 未推流且未开启 Web 服务时，允许直接退出（不取消 Closing）
       };
     }
 
@@ -117,7 +121,7 @@ namespace AudioBridge.Windows
         SetAutostart(_trayAutostartItem.Checked);
       };
       var miExit = new WinForms.ToolStripMenuItem("退出");
-      miExit.Click += (_, __) => { _allowExit = true; _tray!.Visible = false; Close(); };
+      miExit.Click += async (_, __) => { await ExitAndCleanupAsync(); };
 
       menu.Items.Add(miShow);
       menu.Items.Add(_trayStartStopItem);
@@ -186,9 +190,9 @@ namespace AudioBridge.Windows
       }
     }
 
-    private void Menu_Exit_Click(object sender, RoutedEventArgs e)
+    private async void Menu_Exit_Click(object sender, RoutedEventArgs e)
     {
-      Close();
+      await ExitAndCleanupAsync();
     }
 
     private void Menu_UseEncryption_Click(object sender, RoutedEventArgs e)
@@ -452,6 +456,25 @@ namespace AudioBridge.Windows
       }
     }
 
+    private async System.Threading.Tasks.Task ExitAndCleanupAsync()
+    {
+      try
+      {
+        if (_isStreaming)
+        {
+          StopStreaming();
+        }
+      }
+      catch { }
+
+      try { await StopWebAudioServiceAsync(); } catch { }
+      try { _ctrl?.Dispose(); _ctrl = null; } catch { }
+      try { if (_tray != null) { _tray.Visible = false; _tray.Dispose(); _tray = null; } } catch { }
+
+      _allowExit = true;
+      Close();
+    }
+
     private void EnsureWebFilesExist()
     {
       try
@@ -542,17 +565,9 @@ namespace AudioBridge.Windows
           _lastSampleRate = sampleRate;
           _lastChannels = channels;
           
-          // 创建重采样器（用于 Web 客户端）
-          if (sampleRate != TARGET_SAMPLE_RATE)
-          {
-            _resampler = new Audio.AudioResampler(sampleRate, TARGET_SAMPLE_RATE, channels);
-            System.Diagnostics.Debug.WriteLine($"[MainWindow] Created resampler: {sampleRate}Hz -> {TARGET_SAMPLE_RATE}Hz");
-          }
-          else
-          {
-            _resampler = null;
-            System.Diagnostics.Debug.WriteLine($"[MainWindow] No resampling needed: {sampleRate}Hz");
-          }
+          // Web 端：改为直接使用源采样率推送，避免 48k -> 44.1k 下采样造成的高频折叠失真
+          _resampler = null;
+          System.Diagnostics.Debug.WriteLine($"[MainWindow] Web stream using source sample rate: {sampleRate}Hz");
         }
         // append incoming samples into accumulator
         if (_accum.Length < _accumCount + pcm.Length)
@@ -687,30 +702,10 @@ namespace AudioBridge.Windows
             opusBuf.Slice(0, len).CopyTo(packet.Slice(12));
             _udp.Send(packet);
             
-            // 同时发送 PCM 到 Web 客户端 (Web 端使用 PCM 格式)
+            // 同步到 Web 客户端：使用浮点源直接量化（避免沿用已可能裁剪的 pcm16）
             if (_webStreamer != null && _webStreamer.IsStreaming)
             {
-              int headerLen = 8;
-              Span<byte> webPayload = stackalloc byte[headerLen + pcm16.Length * 2];
-              unchecked
-              {
-                webPayload[0] = (byte)(48000 & 0xFF);
-                webPayload[1] = (byte)((48000 >> 8) & 0xFF);
-                webPayload[2] = (byte)((48000 >> 16) & 0xFF);
-                webPayload[3] = (byte)((48000 >> 24) & 0xFF);
-                webPayload[4] = (byte)(2 & 0xFF);
-                webPayload[5] = (byte)((2 >> 8) & 0xFF);
-                webPayload[6] = (byte)(frameSamplesPerCh & 0xFF);
-                webPayload[7] = (byte)((frameSamplesPerCh >> 8) & 0xFF);
-              }
-              // 复制 PCM16 数据
-              for (int i = 0; i < pcm16.Length; i++)
-              {
-                short s = pcm16[i];
-                webPayload[headerLen + i * 2] = (byte)(s & 0xFF);
-                webPayload[headerLen + i * 2 + 1] = (byte)((s >> 8) & 0xFF);
-              }
-              _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+              SendToWebClients(frameSamples);
             }
           }
           else
@@ -738,30 +733,10 @@ namespace AudioBridge.Windows
             Buffer.BlockCopy(tag, 0, packet, 24 + len, 16);
             _udp.Send(packet);
             
-            // 同时发送 PCM 到 Web 客户端 (Web 端使用 PCM 格式,不加密)
+            // 同步到 Web 客户端：使用浮点源直接量化（避免沿用已可能裁剪的 pcm16）
             if (_webStreamer != null && _webStreamer.IsStreaming)
             {
-              int headerLen = 8;
-              Span<byte> webPayload = stackalloc byte[headerLen + pcm16.Length * 2];
-              unchecked
-              {
-                webPayload[0] = (byte)(48000 & 0xFF);
-                webPayload[1] = (byte)((48000 >> 8) & 0xFF);
-                webPayload[2] = (byte)((48000 >> 16) & 0xFF);
-                webPayload[3] = (byte)((48000 >> 24) & 0xFF);
-                webPayload[4] = (byte)(2 & 0xFF);
-                webPayload[5] = (byte)((2 >> 8) & 0xFF);
-                webPayload[6] = (byte)(frameSamplesPerCh & 0xFF);
-                webPayload[7] = (byte)((frameSamplesPerCh >> 8) & 0xFF);
-              }
-              // 复制 PCM16 数据
-              for (int i = 0; i < pcm16.Length; i++)
-              {
-                short s = pcm16[i];
-                webPayload[headerLen + i * 2] = (byte)(s & 0xFF);
-                webPayload[headerLen + i * 2 + 1] = (byte)((s >> 8) & 0xFF);
-              }
-              _ = _ctrl?.BroadcastWebAudioAsync(new ReadOnlyMemory<byte>(webPayload.ToArray()));
+              SendToWebClients(frameSamples);
             }
           }
           _seq++;
@@ -788,55 +763,35 @@ namespace AudioBridge.Windows
         if (_webStreamer == null || !_webStreamer.IsStreaming) return;
         
         int channels = _lastChannels;
-        int sourceSampleRate = _lastSampleRate;
-        
-        // 准备重采样（如果需要）
-        float[] audioData;
-        int outputSampleCount;
-        int outputFrameCount;
-        
-        if (_resampler != null)
-        {
-          // 需要重采样
-          outputSampleCount = _resampler.GetOutputSampleCount(frameSampleCount);
-          audioData = new float[outputSampleCount];
-          outputSampleCount = _resampler.Resample(
-            new ReadOnlySpan<float>(_accum, 0, frameSampleCount),
-            new Span<float>(audioData)
-          );
-          outputFrameCount = outputSampleCount / channels;
-        }
-        else
-        {
-          // 无需重采样，直接使用
-          outputSampleCount = frameSampleCount;
-          outputFrameCount = outputSampleCount / channels;
-          audioData = new float[outputSampleCount];
-          Array.Copy(_accum, audioData, outputSampleCount);
-        }
-        
-        // 转换为 PCM16 并封包
+        int sampleRate = _lastSampleRate;
+
+        // 直接使用源采样率与当前帧样本，避免在服务端做重采样
+        int outputSampleCount = frameSampleCount;
+        int outputFrameCount = outputSampleCount / channels;
+
+        // 封包并转换为 PCM16（加入预衰减，降低削波概率）
         int headerLen = 8;
         byte[] webPayload = new byte[headerLen + outputSampleCount * 2];
         
         // 写入头信息
         unchecked
         {
-          webPayload[0] = (byte)(TARGET_SAMPLE_RATE & 0xFF);
-          webPayload[1] = (byte)((TARGET_SAMPLE_RATE >> 8) & 0xFF);
-          webPayload[2] = (byte)((TARGET_SAMPLE_RATE >> 16) & 0xFF);
-          webPayload[3] = (byte)((TARGET_SAMPLE_RATE >> 24) & 0xFF);
+          webPayload[0] = (byte)(sampleRate & 0xFF);
+          webPayload[1] = (byte)((sampleRate >> 8) & 0xFF);
+          webPayload[2] = (byte)((sampleRate >> 16) & 0xFF);
+          webPayload[3] = (byte)((sampleRate >> 24) & 0xFF);
           webPayload[4] = (byte)(channels & 0xFF);
           webPayload[5] = (byte)((channels >> 8) & 0xFF);
           webPayload[6] = (byte)(outputFrameCount & 0xFF);
           webPayload[7] = (byte)((outputFrameCount >> 8) & 0xFF);
         }
         
-        // 转换为 PCM16
+        // 转换为 PCM16（直接读取累积缓冲区的当前帧样本）
         int outIdx = headerLen;
         for (int i = 0; i < outputSampleCount; i++)
         {
-          short s = (short)Math.Clamp(audioData[i] * 32767f, short.MinValue, short.MaxValue);
+          float fs = _accum[i] * WEB_PRE_ATTENUATION;
+          short s = (short)Math.Clamp(fs * 32767f, short.MinValue, short.MaxValue);
           webPayload[outIdx++] = (byte)(s & 0xFF);
           webPayload[outIdx++] = (byte)((s >> 8) & 0xFF);
         }
